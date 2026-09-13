@@ -1,6 +1,6 @@
 # PR summaries and inline comments
 
-There are two different outputs. The human PR summary is the main report for the user and is never auto-posted. Inline findings are separate drafts that may be posted only after explicit approval. This package does not post either output.
+The main-conversation report explains the PR and its assessment under `presentation.md`. The author-facing `humanReadable` PR summary stays separate in the review artifact and is never auto-posted. Inline findings are separate drafts that may be posted only after explicit approval. This package does not post any of these outputs.
 
 Use fictional examples in packaged prompts. Actual PR/comment links belong to the authorized run context and evidence, not reusable examples.
 

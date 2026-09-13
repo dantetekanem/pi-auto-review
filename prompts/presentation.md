@@ -2,9 +2,31 @@
 
 Use this contract for collector handoffs, zone assessments, findings and the final review. It describes presentation, not permission to publish or a substitute for technical evidence.
 
-## The PR summary comes first
+## Complete report in the main conversation
 
-The final review's `humanReadable` field is the main deliverable: short feedback addressed to the author. Lead with what matters in the accepted assessment. Include how the change works or what it preserves only when that context helps explain the feedback; do not recap the author's code by default. If no failure was established, say what the evidence covers and what remains unverified; do not invent a problem to fill the format.
+The coordinator delivers the complete review handoff to the agent that called `agentic_code_review` (or the invoking session's main agent for `/code-review`), then exits. The calling agent owns the user-facing report and all follow-up interaction. The saved review is the primary source for the presentation and follow-up answers. Before presenting, the calling agent must read the supplied `.review.json`, `.bugs.json` and relevant linked `.map.jsonl` records, even when the handoff looks complete. Verify the run/revision and completion status, and apply final reconciliation to historical findings. Disclose missing, unreadable or incomplete records rather than claiming a verified complete review; label any handoff-only claims. The handoff's detail is not subject to the user-facing word limit.
+
+The calling agent's main report must help the user understand the PR, not just decide whether it is safe. Write it for a maximum three-minute read: at most 500 words for the entire initial visible report, including findings, references and follow-up options. Use plain language and readable headings. Keep detailed evidence and comment drafts in the artifacts for follow-up; do not dump JSON or the evidence map.
+
+The calling agent uses those saved records to write these sections in its visible response:
+- What the PR does: the problem it addresses, observable behavior before and after, and how the important parts work together. Explain the overall understanding of the change, including important preserved behavior or trade-offs. Distinguish verified behavior from inferred intent; disclose what could not be understood.
+- What was analyzed: reviewed target and exact revision, important paths/contracts and failure cases examined, actual checks and results, and untested areas. Keep source references and available reviewer provenance concise.
+- Findings and assessment: accepted findings with impact, source file/line references, blocking status and supported next steps; requested verdicts and A-F ratings with reasons. Separate optional improvements and refuted or unconfirmed concerns from confirmed defects. State when no accepted findings remain or an assessment was not requested.
+- Limits and next steps: completion status, uncertainties, approval conditions and supporting artifact paths. Preserve every material blocker and coverage gap within the word budget. Group related findings when needed and state how many individual comments are available for follow-up; never hide a blocker to shorten the report.
+
+The calling agent ends its report with these four choices and waits for the user's selection. The coordinator does not offer choices or wait for a reply:
+1. Review each comment together, one at a time.
+2. Post comments to the PR: first show the exact proposed payload for approval under `pr-comments.md`; choosing this option alone does not authorize unseen comments. Say when no actionable comments or PR target is available.
+3. Understand what was analyzed: explore the inspected paths, evidence, checks and gaps.
+4. Understand the PR overall: walk through its purpose, behavior and design in more depth.
+
+The invoking agent must show the report in the main conversation without requiring the user to open artifacts or ask again, and before any merge/action approval question. Do not replace it with a completion notice, verdict or links. Synthesize the saved review within the word budget without dropping material information. Never infer approval from a safe verdict. The separate author-facing `humanReadable` PR-summary draft keeps its own 200-word ceiling; retain it in the final review artifact rather than adding it to the initial report by default.
+
+For follow-up questions, the calling agent returns to the same saved review and relevant linked evidence, reading additional records as needed and citing supporting findings or source references. Explain what the review established, what is inferred and what was not examined. If the records do not answer the question, name the new investigation needed instead of inventing an answer or automatically restarting the coordinator.
+
+## Separate PR-summary draft
+
+The final review's `humanReadable` field is short feedback addressed to the author. Lead with what matters in the accepted assessment. Include how the change works or what it preserves only when that context helps explain the feedback; do not recap the author's code by default. If no failure was established, say what the evidence covers and what remains unverified; do not invent a problem to fill the format.
 
 Use one or two natural paragraphs, no longer than needed. The 200-word limit is a ceiling, not a target. Keep source detail in the evidence records.
 
