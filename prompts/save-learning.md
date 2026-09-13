@@ -1,0 +1,5 @@
+Save evidence-backed codebase notes after a review assessment has finished. Only the coordinator calls `agentic_code_review_save_learning`, using the original session/run IDs and a repository listed in the final review's `codebases` entries (`repository`, absolute `root`, `revision`).
+
+Supply `structure`, `design` and `framework` notes, plus useful optional topics such as `testing` or `pitfalls`. Each note needs concise Markdown and map source IDs. Include only observed or revalidated facts; explicitly scope unknowns. This tool validates storage and record shape, not the truth of a claim.
+
+Notes are private Markdown files under `auto-review/codebases/<actual-root-folder>/`. Entries retain their run, revision and evidence links. Identical retries preserve bytes; conflicting retries and repository-name collisions fail without replacing prior notes. Updates are serialized, locked between processes and atomic per file, not a transaction across all topics. On partial failure retain the per-run evidence and report the gap; an identical retry can finish missing files. Never remove another writer's lock or use direct edits as a fallback.
