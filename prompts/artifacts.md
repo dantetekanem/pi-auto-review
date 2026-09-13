@@ -49,7 +49,7 @@ Preserve prepared metadata and add:
 
 - `status`: `complete` or `incomplete`; include `completedAt` only after the assessment finishes.
 - `repository`, `revision`, `problem`, and source-linked `criteria` with `met`, `partial`, `unmet` or `unclear` outcomes and evidence IDs.
-- `humanReadable`: the primary PR summary, addressed to the author, explaining what the change does, how it works and where it falls short. Follow `presentation.md`: two writing passes, ideally 60–90 words, at most 200. Only human prose belongs here, with no attribution/rating header, generic verdict or blocker list. This is a private draft, never an automated posting payload.
+- `humanReadable`: the primary PR summary, addressed to the author and led by what matters in the accepted assessment, with context only where needed. Follow `presentation.md`: technical accuracy, available user-voice guidance and a humanizer pass; at most 200 words, without a minimum target. Only human prose belongs here, with no attribution/rating header, generic verdict or blocker list. This is a private draft, never an automated posting payload.
 - `reviewer`: available runtime model/thinking provenance for this assessment, as defined in `presentation.md`; keep worker provenance with its report/coverage records.
 - `complexity`: score 1–5 plus a short reason.
 - `grades`: `merge` and `deploy`, each either null (not assessed) or `{ "grade": "safe|medium|risky", "rating": "A|B|C|D|E|F", "reason": "...", "conditions": [] }`. Choose one literal value for each field using `presentation.md`. Preserve the existing grade alongside the letter; do not re-grade historical artifacts.

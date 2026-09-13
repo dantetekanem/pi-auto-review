@@ -6,13 +6,13 @@ Use fictional examples in packaged prompts. Actual PR/comment links belong to th
 
 ## 1. Write the human PR summary
 
-Read the accepted final assessment and its reconciliation, not just the raw `bugs` array. Follow `presentation.md`: two writing passes, 60–90 words ideally, at most 200. Address the author and explain what the change does, how it works, and where it falls short. Return natural paragraphs without model attribution, ratings, template labels, a generic verdict or a blocker list. Store only that prose in the final review's `humanReadable` field.
+Read the accepted final assessment and its reconciliation, not just the raw `bugs` array. Follow `presentation.md`: check technical accuracy, then apply available user-voice guidance and a humanizer pass. Address the author directly and lead with what matters. Include context only when needed to understand the feedback, not a routine feature recap. Write no more than needed, at most 200 words. Return natural paragraphs without model attribution, ratings, template labels, a generic verdict or a blocker list. Store only that prose in the final review's `humanReadable` field.
 
 Keep the detailed evidence, grades and provenance alongside it in the structured report. Important failures still need an explanation in the summary; specific fixes belong at their source lines. Do not turn the summary into a general blocking review body.
 
 Illustrative summary for a fictional setup command:
 
-> Your onboarding command gathers the models, extensions and settings available in the current session, then asks the lead agent to recommend setup steps without applying them. That keeps configuration decisions with the user. The reviewed inventory drops explicit thinking levels, and the update guidance treats moving branches and temporary packages like ordinary installed versions. Those gaps can make the recommendations wrong even though the command itself stays read-only.
+> We're dropping the explicit thinking levels from the inventory and treating moving branches and temporary packages like regular installed versions. Both can lead to wrong setup recommendations. The command doesn't apply changes, but users still need to be able to trust what it recommends.
 
 Check each statement against the actual run before using this pattern. Do not copy the example as a current review. Give the summary to the user as a private draft; approval of inline comments does not authorize publishing it.
 
@@ -22,7 +22,7 @@ For each proposed inline comment:
 
 1. Resolve the submitted ID through the final map and reconciliation. Use the accepted interpretation, including corrections. Keep confirmed bugs, optional suggestions, inherited prerequisites and unconfirmed/refuted history distinct. Never infer acceptance from `blocks: true` in a raw historical record.
 2. Verify repository, PR, reviewed head SHA and source location. Select an actual diff line and side (`RIGHT` for the new version, `LEFT` for a deletion). A file/symbol location alone is not enough. If a blocker cannot be anchored, retain it privately and report the placement gap; do not promote it to a general PR-body blocker.
-3. Draft a short comment from the finding's `humanReadable`, `rating`, `impact` and technical evidence. Include expected versus actual behavior, the smallest supported fix or missing proof, and whether verification was executed or only source-traced. Preserve origin and counterevidence. Do not repeat the full report.
+3. Draft a short comment from the finding's `humanReadable`, `rating`, `impact` and technical evidence. Include expected versus actual behavior, the smallest supported fix or missing proof, and whether verification was executed or only source-traced. Preserve origin and counterevidence. Apply the same available user-voice guidance and humanizer pass to the prose without changing the required format below. Do not repeat the full report.
 4. Use the provenance of the assessment that supports this wording. The finding receipt's `reviewer` is runtime submission metadata; later reconciliations may have their own source-linked reviewer. Never credit a rewritten assessment to the original model without evidence. Render unavailable fields as `unavailable`, not a guessed name or thinking level.
 
 Use this inline format, with one literal A–F rating:

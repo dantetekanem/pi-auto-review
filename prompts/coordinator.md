@@ -22,7 +22,7 @@ Create one group for this run with `tasks_create_in_batch`. Create these seven e
 | 4. Assign review zones | Refined complexity 1–5 with reasons; suitable read tiers; each unit/criterion and shared invariant assigned; expected agents and coverage recorded. |
 | 5. Review | Zone reports examined; findings submitted through the append tool and returned IDs recorded; expected reports accounted for, with failures/omissions clearly separate from reviewed coverage. |
 | 6. Reconcile and grade | Every original criterion checked against implementation and evidence; disagreements settled or documented; requested grades and A–F ratings justified without promoting history or missing evidence into defects; final fingerprint checked for drift. |
-| 7. Save and report | Final map, bug handoff and review JSON read back; per-run learning and enabled codebase notes saved/read back or persistence failure disclosed; coverage explicit; human-only PR summary checked in two passes, ideally 60–90 words and never over 200, with metadata separate and no general blocker body. |
+| 7. Save and report | Final map, bug handoff and review JSON read back; per-run learning and enabled codebase notes saved/read back or persistence failure disclosed; coverage explicit; human-only PR summary checked under `presentation.md` for technical accuracy and natural user-voice wording, no longer than needed and never over 200 words, with metadata separate and no general blocker body. |
 
 For follow-up missions, pass prior finding/run/record IDs, reusable evidence, reopened units with reasons, current-delta questions and the remaining budget. Require independent judgment of that delta and each assigned prior finding's current outcome, without repeating unaffected discovery.
 
