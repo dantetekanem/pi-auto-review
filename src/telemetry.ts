@@ -3,7 +3,6 @@ import { Type } from 'typebox';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const identity = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const finite = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -31,7 +30,7 @@ export function registerTelemetry(pi: ExtensionAPI, root: string, now = () => pe
 
   pi.registerTool({
     name: 'agentic_code_review_step', label: 'Review step telemetry',
-    description: readFileSync(fileURLToPath(new URL('../prompts/step.md', import.meta.url)), 'utf8'),
+    description: 'Inactive review telemetry prototype.',
     parameters: Type.Object({
       sessionId: Type.String({ maxLength: 128 }), runId: Type.String({ maxLength: 128 }),
       stage: Type.Integer({ minimum: 1, maximum: 7 }),

@@ -48,7 +48,19 @@ function validateFinding(value: unknown): Finding {
   if (kind !== 'bug') return { ...base, blocks: false };
   const evidence = finding.evidence;
   if (!Array.isArray(evidence) || !evidence.length || evidence.length > 50) throw new Error('Invalid evidence.');
-  return { ...base, status: 'open', expected: text(finding.expected, 'expected behavior'), actual: text(finding.actual, 'actual behavior'), origin: ['introduced', 'expanded', 'pre-existing'].includes(String(finding.origin)) ? finding.origin : (() => { throw new Error('Invalid origin.'); })(), blocks: typeof finding.blocks === 'boolean' ? finding.blocks : (() => { throw new Error('Invalid blocks flag.'); })(), verification: text(finding.verification, 'verification'), evidence: evidence.map(item => { const source = object(item, 'evidence'); return { source: text(source.source, 'evidence source', 1000), detail: text(source.detail, 'evidence detail') }; }) };
+  const expected = text(finding.expected, 'expected behavior');
+  const actual = text(finding.actual, 'actual behavior');
+  if (!['introduced', 'expanded', 'pre-existing'].includes(String(finding.origin))) throw new Error('Invalid origin.');
+  const origin = finding.origin;
+  if (typeof finding.blocks !== 'boolean') throw new Error('Invalid blocks flag.');
+  return {
+    ...base, status: 'open', expected, actual, origin, blocks: finding.blocks,
+    verification: text(finding.verification, 'verification'),
+    evidence: evidence.map(item => {
+      const source = object(item, 'evidence');
+      return { source: text(source.source, 'evidence source', 1000), detail: text(source.detail, 'evidence detail') };
+    }),
+  };
 }
 
 async function atomicWrite(path: string, content: string): Promise<void> {

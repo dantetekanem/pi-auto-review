@@ -88,8 +88,7 @@ This budget is prompt-directed, not an enforced deadline; missing evidence stays
 This is prompt-directed behavior, not a deterministic reviewer or a sandbox.
 Workers can fail; incomplete coverage is not approval. Merge/deployment grades authorize neither action.
 The workflow forbids source edits, automatic retries, installs, publication, merges, and deployments.
-Telemetry capture is currently disabled. The [automatic telemetry plan](docs/automatic-telemetry-plan.md)
-requires runtime hooks in the companion packages; the manual prototype is not registered or sent to agents.
+Telemetry capture is currently disabled.
 It does not train model weights or run an endless self-review loop.
 
 See the [workflow](prompts/workflow.md), [evidence contract](prompts/artifacts.md),

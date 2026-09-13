@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/dantetekanem/pi-auto-review.git" },
   "keywords": ["pi-package"],
-  "files": ["src", "prompts", "docs", "README.md", "LICENSE"],
+  "files": ["src", "prompts", "README.md", "LICENSE"],
   "pi": { "extensions": ["./src/index.ts"], "prompts": [] },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.85.1",

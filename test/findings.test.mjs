@@ -68,6 +68,17 @@ test('rejects malformed, sealed, mismatched, and aborted submissions without cha
   assert.equal(readFileSync(path, 'utf8'), mismatch);
 });
 
+test('rejects invalid confirmed-bug fields without changing artifact bytes', async t => {
+  const h = fixture(t); h.prepare(); const submit = await h.register(), path = h.path(runId), original = readFileSync(path, 'utf8');
+  for (const [field, value, error] of [
+    ['expected', '', /expected behavior/], ['actual', '', /actual behavior/],
+    ['origin', 'unknown', /origin/], ['blocks', 'yes', /blocks flag/],
+  ]) {
+    await assert.rejects(submit({ sessionId: h.sessionId, runId, finding: { ...record(), [field]: value } }), error);
+    assert.equal(readFileSync(path, 'utf8'), original);
+  }
+});
+
 test('offers a portable string enum and persists only declared location fields', async t => {
   const h = fixture(t); h.prepare(); const submit = await h.register();
   const kind = submit.parameters.properties.finding.properties.kind;

@@ -22,7 +22,14 @@ function prepareReview(pi: ExtensionAPI, ctx: ExtensionContext, context: string,
     throw new Error('pi-extended-teams must provide an active spawn_agent or spawn_swarm_agents tool.');
   }
 
-  const prompts = Object.fromEntries(['coordinator', 'workflow', 'collect', 'deep-collect', 'artifacts', 'presentation'].map(name => [name, promptPath(name)]));
+  const prompts = {
+    coordinator: promptPath('coordinator'),
+    workflow: promptPath('workflow'),
+    collect: promptPath('collect'),
+    'deep-collect': promptPath('deep-collect'),
+    artifacts: promptPath('artifacts'),
+    presentation: promptPath('presentation'),
+  };
   for (const path of Object.values(prompts)) accessSync(path);
   const launch = prompt('launch');
   const runId = randomUUID(), directory = join(root, sessionId), name = `review-${runId}`;

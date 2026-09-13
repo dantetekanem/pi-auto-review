@@ -87,8 +87,9 @@ export function registerCodebaseLearning(pi: ExtensionAPI, root: string): void {
             const path = join(directory, `${note.topic}.md`), current = stored.get(`${note.topic}.md`) ?? '';
             const body = `## ${review.completedAt} | ${runId}\n\nRevision: ${codebase.revision}\nReview: ${reviewPath}\nMap: ${join(root, sessionId, `${runId}.map.jsonl`)}\nSources: ${note.sourceIds.join(', ')}\n\n${note.content}\n`;
             const entry = `${marker}${createHash('sha256').update(body).digest('hex')} -->\n${body}`;
-            if (current.includes(marker) && !current.includes(entry)) throw new Error('Different learning was already saved for this run; preserve it.');
-            return { topic: note.topic, path, content: current.includes(entry) ? current : `${current || `${identity}# ${note.topic}\n`}\n${entry}`, changed: !current.includes(entry) };
+            const alreadySaved = current.includes(entry);
+            if (current.includes(marker) && !alreadySaved) throw new Error('Different learning was already saved for this run; preserve it.');
+            return { topic: note.topic, path, content: alreadySaved ? current : `${current || `${identity}# ${note.topic}\n`}\n${entry}`, changed: !alreadySaved };
           });
           signal?.throwIfAborted();
           for (const update of updates) {

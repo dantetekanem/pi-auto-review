@@ -16,7 +16,7 @@ const { registerTelemetry } = await createJiti(import.meta.url, { moduleCache: f
 function fixture(t, sharedRoot) {
   const storage = sharedRoot || mkdtempSync(join(tmpdir(), 'review-telemetry-'));
   if (!sharedRoot) t.after(() => rmSync(storage, { recursive: true, force: true }));
-  const sessionId = 'invoking-session', runId = '9daa6033-fc1c-41a4-9237-78b9d62c458b';
+  const sessionId = 'invoking-session', runId = '00000000-0000-4000-8000-000000000001';
   mkdirSync(join(storage, sessionId), { recursive: true });
   writeFileSync(join(storage, sessionId, `${runId}.review.json`), JSON.stringify({ sessionId, runId, status: 'prepared' }));
   const handlers = new Map(), tools = new Map();

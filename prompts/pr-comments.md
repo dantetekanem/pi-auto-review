@@ -2,13 +2,15 @@
 
 There are two different outputs. The human PR summary is the main report for the user and is never auto-posted. Inline findings are separate drafts that may be posted only after explicit approval. This package does not post either output.
 
+Use fictional examples in packaged prompts. Actual PR/comment links belong to the authorized run context and evidence, not reusable examples.
+
 ## 1. Write the human PR summary
 
 Read the accepted final assessment and its reconciliation, not just the raw `bugs` array. Follow `presentation.md`: two writing passes, 60–90 words ideally, at most 200. Address the author and explain what the change does, how it works, and where it falls short. Return natural paragraphs without model attribution, ratings, template labels, a generic verdict or a blocker list. Store only that prose in the final review's `humanReadable` field.
 
 Keep the detailed evidence, grades and provenance alongside it in the structured report. Important failures still need an explanation in the summary; specific fixes belong at their source lines. Do not turn the summary into a general blocking review body.
 
-Example of the tone, based on the [PR24 description](https://github.com/dantetekanem/pi-extended-teams/pull/24) and its historical comments, not a fresh assessment of its current head:
+Illustrative summary for a fictional setup command:
 
 > Your onboarding command gathers the models, extensions and settings available in the current session, then asks the lead agent to recommend setup steps without applying them. That keeps configuration decisions with the user. The reviewed inventory drops explicit thinking levels, and the update guidance treats moving branches and temporary packages like ordinary installed versions. Those gaps can make the recommendations wrong even though the command itself stays read-only.
 
@@ -41,19 +43,19 @@ The header and rating belong only to the inline draft, never to the human PR sum
 
 ### Unconfirmed history example
 
-The [PR24 dispatch comment](https://github.com/dantetekanem/pi-extended-teams/pull/24#discussion_r3999874815) is a correction, not an established blocker. A short human field could say:
+Suppose a dispatch finding was corrected because no practical overlapping-dispatch failure was established. A short human field could say:
 
 > The code checks whether the agent is idle before loading inventory. We haven't shown that overlapping dispatch can actually happen, so this is history to investigate, not a reason to change the code.
 
-An illustrative `C` rating must retain the qualification: “Unconfirmed, nonblocking review history. A practical overlapping-dispatch failure was not established.” Keep the technical correction about Pi's generic asynchronous extension error. Do not request a guard or label the issue fixed. Draft/post a historical correction only when specifically requested; omit it from an ordinary actionable-finding batch. This example does not re-grade or edit the saved review.
+An illustrative `C` rating must retain the qualification: "Unconfirmed, nonblocking review history. A practical overlapping-dispatch failure was not established." Preserve counterevidence, such as the runtime reporting an asynchronous error rather than failing silently. Do not request a guard or label the issue fixed on this evidence. Draft/post a historical correction only when specifically requested; omit it from an ordinary actionable-finding batch. This fictional example does not assess an actual change.
 
-Other references show distinctions the short wording must preserve:
-- [PR28](https://github.com/dantetekanem/pi-extended-teams/pull/28#discussion_r3999876813): report loss was source-traced; premature claim release was not established.
-- [PR29](https://github.com/dantetekanem/pi-extended-teams/pull/29#discussion_r3999879469): the parent report-loss issue is inherited, not a second newly introduced defect.
-- [PR30](https://github.com/dantetekanem/pi-extended-teams/pull/30#discussion_r3999881415): a conditional contention schedule was traced, not runtime-reproduced.
-- [PR31](https://github.com/dantetekanem/pi-extended-teams/pull/31#discussion_r3999883716): checkpoint publication can fail while the full report and cleanup fences remain intact.
+Other fictional cases show distinctions the short wording must preserve:
+- Report delivery: report loss is source-traced; premature claim release is not established.
+- Inherited risk: a parent report-loss issue is a prerequisite, not a second newly introduced defect.
+- Contention: a conditional schedule is source-traced, not runtime-reproduced.
+- Partial reporting: a checkpoint can fail while the full report and cleanup fences remain intact.
 
-These are historical presentation references, not permission to review, change or publish on those PRs.
+These examples do not establish findings or authorize review, changes or publication.
 
 ## 3. Approval before any automated inline posting
 
