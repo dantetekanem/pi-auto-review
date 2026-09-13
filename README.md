@@ -79,6 +79,10 @@ Run evidence lives in the configured Pi agent directory's `auto-review/<session-
 Shared `structure.md`, `design.md`, and `framework.md` notes live in `auto-review/codebases/<codebase>/`.
 Entries link to their review, revision, and sources. Later runs revalidate useful notes and append corrections.
 
+For a requested re-review, the coordinator links the earlier assessment and reviews the fix plus affected boundaries.
+It reuses revalidated evidence, reports prior findings' outcomes, and targets 15 minutes within a 20-minute budget.
+This budget is prompt-directed, not an enforced deadline; missing evidence stays explicit.
+
 ## Experimental limits
 
 This is prompt-directed behavior, not a deterministic reviewer or a sandbox.

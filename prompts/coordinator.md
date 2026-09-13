@@ -12,17 +12,19 @@ Require `spawn_agent` or `spawn_swarm_agents`, `send_message`, `report_and_exit`
 
 Pi-tasks must have its own initialized extension instance and your distinct session ID. Use session-scoped storage without a shared `PI_TASKS` override; normal task JSON/lock/temp bookkeeping is allowed outside the repository. Check relevant task configuration/environment if isolation is not established. Never clear or adopt another session's list. If task storage is shared or lies in the reviewed tree, report the setup blocker instead of changing settings.
 
-Create one group for this run with `tasks_create_in_batch`. Create these seven executable stage tasks in order, with the acceptance evidence below in their descriptions. Add each preceding stage as `addBlockedBy` before starting its successor. Start tasks with an owner and `in_progress`; complete them with `task_done` only after reading and recording the evidence.
+Create one group for this run with `tasks_create_in_batch`. Create these seven executable stage tasks in order, with the acceptance evidence below in their descriptions. Add each preceding stage as `addBlockedBy` before starting its successor. Start tasks with an owner and `in_progress`; complete them with `task_done` only after reading and recording the evidence. For a follow-up, apply the workflow's re-review contract: revalidated prior evidence can satisfy collection stages without new collectors. Record its original run/record IDs and current validation; never treat a missing prior assessment as completed coverage.
 
 | Stage | Required evidence before completion |
 | --- | --- |
 | 1. Establish the problem | Actual repository/revision or diff fingerprint; original ask and source-linked criteria; preserved behavior/non-goals; actual codebase roots/identities and revalidated topic notes/history; resolved decision-changing intent questions; bounded investigation budget. |
-| 2. Collect | Actual collection reports; accepted requirement/test/file/symbol/zone inventory and stable unit IDs; sources and explicit unknowns. |
-| 3. Deep-collect | Different agents' actual reports; connected traces around three hops; cycles, guards, counterevidence, stopping reasons and remaining frontier for every unit. |
+| 2. Collect | Accepted inventory from actual new reports or revalidated prior evidence; requirement/test/file/symbol/zone inventory and stable unit IDs; sources and explicit unknowns. |
+| 3. Deep-collect | Connected traces from distinct collection/deep owners, newly received or revalidated from prior evidence; about three hops, cycles, guards, counterevidence, stopping reasons and remaining frontier for every unit. |
 | 4. Assign review zones | Refined complexity 1–5 with reasons; suitable read tiers; each unit/criterion and shared invariant assigned; expected agents and coverage recorded. |
 | 5. Review | Zone reports examined; findings submitted through the append tool and returned IDs recorded; expected reports accounted for, with failures/omissions clearly separate from reviewed coverage. |
 | 6. Reconcile and grade | Every original criterion checked against implementation and evidence; disagreements settled or documented; requested grades and A–F ratings justified without promoting history or missing evidence into defects; final fingerprint checked for drift. |
 | 7. Save and report | Final map, bug handoff and review JSON read back; per-run learning and enabled codebase notes saved/read back or persistence failure disclosed; coverage explicit; human-only PR summary checked in two passes, ideally 60–90 words and never over 200, with metadata separate and no general blocker body. |
+
+For follow-up missions, pass prior finding/run/record IDs, reusable evidence, reopened units with reasons, current-delta questions and the remaining budget. Require independent judgment of that delta and each assigned prior finding's current outcome, without repeating unaffected discovery.
 
 The map is the durable evidence record; tasks track progress. Put task IDs, stage, assigned agents, returned report/finding IDs and evidence links in map coverage records and task metadata. Workers return evidence to you; they must not manage your task list. Four active task slots are not a limit on helper concurrency. If a stage needs separate work items, create named units/batches before executing them and preserve the stage dependency.
 
