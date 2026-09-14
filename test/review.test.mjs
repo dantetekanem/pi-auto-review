@@ -149,7 +149,16 @@ test('both entry points launch one nested-enabled coordinator with raw context a
     assert.equal(request.params.allow_nested_read_agents, true);
 
     const details = request.params.metadata;
-    assert.equal(readJson(details.paths.review).context, context);
+    assert.match(details.runId, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+    assert.equal(request.requestId, details.runId);
+    assert.equal(request.params.name, `review-${details.runId.slice(0, 8)}`);
+    const review = readJson(details.paths.review);
+    assert.equal(review.coordinator.name, request.params.name);
+    for (const [kind, path] of Object.entries(details.paths)) {
+      const extension = kind === 'map' ? 'jsonl' : 'json';
+      assert.equal(path, join(harness.storage, details.sessionId, `${details.runId}.${kind}.${extension}`));
+    }
+    assert.equal(review.context, context);
     assert.ok(request.params.prompt.includes(JSON.stringify(details.paths.review)));
     assert.ok(request.params.prompt.includes('coordinator.md'));
     assert.ok(request.params.prompt.length < 1500);

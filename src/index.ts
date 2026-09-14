@@ -57,7 +57,7 @@ function prepareReview(
 
   const runId = randomUUID();
   const directory = join(root, sessionId);
-  const name = `review-${runId}`;
+  const name = `review-${runId.slice(0, 8)}`;
   const paths = {
     map: join(directory, `${runId}.map.jsonl`),
     bugs: join(directory, `${runId}.bugs.json`),
