@@ -89,6 +89,8 @@ Prove claims through source traces and safe focused checks. Distinguish a confir
 
 Internally check each criterion again after collection, deep tracing and final review: requirement → expected behavior → implementation → evidence → connected impact. Do not adapt the requirement to match the solution. Resolve disagreements with evidence, not voting or another whole-PR review. Investigate remaining concrete questions within the run's budget; unresolved material uncertainty affects the final grade.
 
+Apply the `Targeted context gathering` policy in `review-zone.md` to unresolved material concerns during reconciliation. Reuse workers' cited history instead of repeating their searches; git archaeology is not a per-line review step.
+
 Use exactly `safe`, `medium` or `risky` for each requested merge/deploy assessment and add its A–F rating using the shared `presentation.md` contract. Leave an unrequested assessment null. Keep evidence state and origin explicit; the letter neither confirms a defect nor overrides reconciliation.
 
 - **safe:** criteria are met, material impact is understood and current evidence supports proceeding within the stated scope. This is not a guarantee of zero risk.
