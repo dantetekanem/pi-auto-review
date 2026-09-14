@@ -112,6 +112,7 @@ function prepareReview(
       status: 'prepared',
       grades: { merge: null, deploy: null },
       collection: null,
+      collectors: 0,
       pack: null,
       prContext: null,
     }],

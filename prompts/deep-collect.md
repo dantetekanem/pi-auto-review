@@ -4,6 +4,8 @@ Use only the review instructions, stage prompts, and context supplied by `pi-aut
 
 Consume the accepted inventory and explain the changed behavior's connected impact. This stage uses different agents from initial collection. Do not restate the diff or turn a search hit into an assumed call graph.
 
+With a pack, your mission is a closed list of entries that need a trace past the pack's depth: an async hop, a host/engine boundary, a dynamic dispatch, a contract a criterion depends on. Trace those entries and nothing else, from the pack's frontier, never from the diff again; stop after the list is settled or after about three hops per entry. Zone reviewers work beside you and do not wait for you; your report is reconciled after theirs.
+
 Reuse the index pack and the collection's `sparsity_collect` node/edge evidence, and check their source fingerprints and limits. The pack's depth-2 signatures and frontier tell you where its tracing stopped; start your hops there. For an uncovered or changed Ruby/JS/TS method/scope, call `sparsity_collect` with `target: path:line`, `max_depth: 3` and `vicinity_check: 20`. Do not repeat an identical traversal just to generate another report. For an edge reported as outside the component root, widen `root` for that anchor when the dependency matters; otherwise record it as the boundary. Follow unresolved or ambiguous edges with direct source evidence; static candidates and depth stops do not prove runtime reachability or complete coverage. If the tool is unavailable, report that limitation and continue authorized inspection without installs.
 
 ## Trace from each review unit

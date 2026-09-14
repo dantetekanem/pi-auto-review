@@ -101,8 +101,13 @@ Shared `structure.md`, `design.md`, and `framework.md` notes live in `auto-revie
 
 ## Measuring the pack
 
-Every final review JSON records `collection` (`pack` or `diff-only`) and, for pack runs, the `sparsity_index` metrics
-(build time, anchors, edges, unresolved rate, inline and spilled tokens). Add the line `mode: diff-only` to a review's
+A pack whose manifest shows no truncation, no skipped production anchor and no unresolved edge inside a criterion's
+anchor is the inventory: no collector runs and zone reviewers start at once. Otherwise the failing items form a closed gap
+list for one collector that runs beside the reviewers, never in front of them.
+
+Every final review JSON records `collection` (`pack`, `pack+gaps` or `diff-only`), `collectors` (how many collection
+lanes ran) and, for pack runs, the `sparsity_index` metrics (build time, anchors, edges, unresolved rate, inline and
+spilled tokens). Add the line `mode: diff-only` to a review's
 context to skip the index on purpose. Compare a few runs of each kind with wall time and findings:
 
 ```sh

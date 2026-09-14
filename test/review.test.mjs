@@ -210,6 +210,7 @@ test('prepared artifacts are private, readable, session-scoped and outside the p
   }
   assert.deepEqual(review.grades, { merge: null, deploy: null });
   assert.equal(review.collection, null);
+  assert.equal(review.collectors, 0);
   assert.equal(review.pack, null);
   assert.equal(review.prContext, null);
   assert.equal(
