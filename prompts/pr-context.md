@@ -21,7 +21,7 @@ Use the PR's `baseSha` and `headSha` (`baseRefOid`/`headRefOid` on GitHub) as th
 
 Classify every thread: human or automated (service accounts such as `*@*.iam.gserviceaccount.com`, names ending in `[bot]`, known review bots), inline with `path:line` or general, and open, resolved or outdated. Save the full text to `pr-threads.md` in the run directory and record one `evidence` record per thread with a one-sentence gist and its classification.
 
-Rules the workers receive: a point already raised and resolved is history, not a finding; an open human thread about a zone becomes a reopened question for that zone's reviewer to settle with current evidence, never a new bug by default; an automated comment is a lead to verify, not evidence; the review reconciles against these threads and never repeats one under a new title.
+Rules the workers receive: a point already raised and resolved is history, not a finding; an open human thread about a zone becomes a reopened question for that zone's reviewer to settle with current evidence, never a new bug by default; an automated comment is a lead to verify, not evidence; an author's self-audit or checklist comment is not a work list, verify only the claims a criterion depends on and never re-run the author's checklist; the review reconciles against these threads and never repeats one under a new title.
 
 ## 3. CI status
 

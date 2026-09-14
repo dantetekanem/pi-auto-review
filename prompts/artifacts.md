@@ -18,6 +18,7 @@ Every record has `id`, `kind`, `runId`, `repository`, `revision`, `state`, and `
 | `unit` | Zone, changed paths/symbols, requirement IDs, contract, relevant lenses/tests, required checks and owner. |
 | `edge` | From/to unit or symbol, relationship, hop depth, changed assumption, impact and resolution evidence. |
 | `evidence` | Linked units/criteria, what was inspected or executed, exact result, counterevidence and limits. |
+| `stage` | One per finished workflow stage: `stage`, `startedAt`, `endedAt` (both from `date -u`), the agents it commissioned. The only place time is recorded during the run. |
 | `coverage` | Agent/zone, expected and received reports, searched scope, depth, stopping reason, unexplored frontier and failed/queued/omitted work. The collection-stage record also carries `pack`: the `sparsity_index` pack path, its `metrics.json` values (`elapsedMs`, `anchors`, `edges`, `unresolvedRate`, `tokens`) and the index/program notes, or `pack: null` with `collection: "diff-only"` when the index was skipped. |
 | `finding` | Criterion/unit IDs, classification, the `taste.md` lens that led to it, evidence, impact, suggested smallest fix or missing proof, and whether introduced, expanded or pre-existing. |
 | `learning` | Reusable claim, repository/symbol/behavior scope, evidence, last validated revision, confidence, invalidation conditions and superseded record IDs. |
@@ -55,6 +56,7 @@ Preserve prepared metadata and add:
 - `complexity`: score 1–5 plus a short reason.
 - `grades`: `merge` and `deploy`, each either null (not assessed) or `{ "grade": "safe|medium|risky", "rating": "A|B|C|D|E|F", "reason": "...", "conditions": [] }`. Choose one literal value for each field using `presentation.md`. Preserve the existing grade alongside the letter; do not re-grade historical artifacts.
 - `findings`: map/bug/optional-finding IDs with reconciliation corrections where needed; `coverage`: inspected zones, task/stage and report IDs, remaining frontier, check results and completeness.
+- `timing`: `{ stages: { "1": ms, …, "7": ms }, totalMs, budgetMs, overrun }` computed from the `stage` records at the end; `null` until then.
 - `learning`: `{ reused, refuted, saved }` for runs with `codebasesRoot`: lines from the current blocks that were reused or refuted (`topic:gist` with the owning run ID) and the topics saved; `null` otherwise.
 - `prContext`: for a pull request target, the object defined in `pr-context.md` section 4 (url, provider, number, title, head, base, draft, state, labels, checks with required states and staleness, thread counts by open/resolved/automated, linked issues, saved file names); `null` for a local diff.
 - `collection`: `"pack"` when the pack was accepted as the inventory and no collector ran, `"pack+gaps"` when a closed gap list went to a collector beside the reviewers, `"diff-only"` when the run context asked to skip the index or the tool was unavailable; `collectors`: how many collection and deep-collection lanes ran; `pack`: the pack path plus the `metrics.json` summary (`elapsedMs`, `anchors`, `edges`, `unresolvedRate`, `tokens`), or null. These fields make runs comparable.

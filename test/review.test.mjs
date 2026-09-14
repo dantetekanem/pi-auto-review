@@ -215,6 +215,7 @@ test('prepared artifacts are private, readable, session-scoped and outside the p
   assert.equal(review.pack, null);
   assert.equal(review.prContext, null);
   assert.equal(review.learning, null);
+  assert.equal(review.timing, null);
   assert.equal(
     review.prompts.prContext,
     fileURLToPath(new URL('../prompts/pr-context.md', import.meta.url)),
