@@ -8,8 +8,24 @@ import { join } from 'node:path';
 const readPrompt = () => readFileSync(new URL('../prompts/finding.md', import.meta.url), 'utf8');
 const sessionPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const runPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const kinds = ['bug', 'fix', 'nit', 'question'] as const;
+const lenses = [
+  'ownership',
+  'naming',
+  'boundaries',
+  'failure_paths',
+  'tests_honesty',
+  'tests_coverage',
+  'data_access',
+  'business_rule',
+  'simplify',
+  'duplication',
+  'scope',
+  'idiom',
+  'comments',
+] as const;
 
-type Finding = Record<string, unknown> & { kind: 'bug' | 'fix' | 'nit' };
+type Finding = Record<string, unknown> & { kind: (typeof kinds)[number] };
 
 function requireText(value: unknown, name: string, max = 2000): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max) {
@@ -42,7 +58,7 @@ function requireIdentifier(value: unknown, name: string, pattern: RegExp): strin
 function validateFinding(value: unknown): Finding {
   const finding = requireObject(value, 'finding');
   const kind = finding.kind;
-  if (kind !== 'bug' && kind !== 'fix' && kind !== 'nit') {
+  if (!kinds.includes(kind as (typeof kinds)[number])) {
     throw new Error('Invalid finding kind.');
   }
 
@@ -59,7 +75,7 @@ function validateFinding(value: unknown): Finding {
   }
 
   const base: Finding = {
-    kind,
+    kind: kind as (typeof kinds)[number],
     sourceIds: requireLinks(finding.sourceIds, 'source links'),
     requirementIds: requireLinks(finding.requirementIds, 'requirement links'),
     unitIds: requireLinks(finding.unitIds, 'unit links'),
@@ -78,6 +94,12 @@ function validateFinding(value: unknown): Finding {
   if (finding.humanReadable !== undefined || finding.rating !== undefined) {
     base.humanReadable = requireText(finding.humanReadable, 'human-readable summary', 400);
     base.rating = requireIdentifier(finding.rating, 'rating (A–F)', /^[A-F]$/);
+  }
+  if (finding.lens !== undefined) {
+    if (!lenses.includes(finding.lens as (typeof lenses)[number])) {
+      throw new Error('Invalid lens.');
+    }
+    base.lens = finding.lens;
   }
   if (kind !== 'bug') {
     return { ...base, blocks: false };
@@ -137,7 +159,11 @@ const schema = Type.Object({
   sessionId: Type.String({ description: 'Prepared review session ID.', maxLength: 128 }),
   runId: Type.String({ description: 'Prepared review run UUID.' }),
   finding: Type.Object({
-    kind: Type.String({ enum: ['bug', 'fix', 'nit'] }),
+    kind: Type.String({ enum: [...kinds] }),
+    lens: Type.Optional(Type.String({
+      enum: [...lenses],
+      description: 'The taste lens from taste.md that produced this lead. For a bug, the observation that surfaced it.',
+    })),
     sourceIds: Type.Array(Type.String()),
     requirementIds: Type.Array(Type.String()),
     unitIds: Type.Array(Type.String()),
@@ -149,12 +175,14 @@ const schema = Type.Object({
       startLine: Type.Integer(),
       endLine: Type.Integer(),
     }),
-    title: Type.String(),
+    title: Type.String({
+      description: 'A short sentence naming what goes wrong, as you would summarize it to a colleague. Not an instruction to fix it.',
+    }),
     impact: Type.String(),
     suggestedFix: Type.String(),
     humanReadable: Type.Optional(Type.String({
       maxLength: 400,
-      description: 'Required for new runs. About 25–40 plain-language words: what happens, why it matters, and the supported next step.',
+      description: 'Required for new runs. At most 400 characters, said the way you would tell the author at their desk: what they would see go wrong, then what you would do or ask. Follow the supplied voice.md.',
     })),
     rating: Type.Optional(Type.String({
       enum: ['A', 'B', 'C', 'D', 'E', 'F'],

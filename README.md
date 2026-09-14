@@ -48,6 +48,11 @@ Agents can also call `agentic_code_review` with plain-text context.
 One coordinator establishes the problem, collects, traces deeper, assigns zones,
 reviews, reconciles, then saves and reports. Intake questions return to your original conversation.
 
+For a pull request URL the coordinator first pulls the PR itself through the provider's CLI (`gh` for github.com,
+`gs` for Meteorite), read-only: the description becomes a requirement source, existing review threads and bot comments
+become evidence to reconcile against rather than repeat, and the CI state with its required checks becomes a grading
+input. The [PR context contract](prompts/pr-context.md) has the exact commands and record shapes.
+
 ## Collection and agent tiers
 
 | Tier | Work |
@@ -63,13 +68,29 @@ Complexity (1–5) guides zone size and coverage, not a blanket upgrade to the s
 Collectors trace about three connections and record their stopping points and unresolved paths.
 
 Optional: allow the `pi-agentic-search/index.ts` entry for child agents.
-When available, its `sparsity_collect` tool gathers bounded Ruby/JS/TS call context with ±20 lines at each anchor.
-Deep collectors and reviewers reuse unchanged snippets/fingerprints; static candidates are not runtime proof.
+When available, the coordinator starts collection with one `sparsity_index` call over the exact diff:
+changed definitions, their resolved calls, callers, tests, removed definitions with surviving callers,
+and an explicit recap of unresolved edges, saved as a pack in the run directory. Workers read their anchors from it
+and use `sparsity_collect` for one more definition when a zone needs deeper context.
+Static candidates are not runtime proof.
 Missing optional tooling remains an explicit coverage gap, not permission to install anything.
+
+## Taste as the instrument
+
+Reviewers do not find bugs by scanning for bugs. They notice the optional boolean, the stub in `setup`,
+the rule living in a helper, the name that contradicts the flow, and follow it.
+The [taste contract](prompts/taste.md) turns those observations into leads: what to notice, what to check,
+what it usually hides, and how to ask. It was built from twelve months of the maintainer's review comments,
+where one comment in four starts as taste and ends pointing at a defect.
+
+A lead settles into a `bug` (with the `lens` that surfaced it), a `question` for the author,
+a `nit`, or nothing. Taste alone never blocks; what it uncovers can.
 
 ## Reports and reusable knowledge
 
-The human summary gets two writing passes: about 20 seconds to read, at most 60.
+Every sentence written for a person follows the [voice contract](prompts/voice.md):
+written first as one engineer would say it to another, then checked against the evidence.
+The human summary takes about 20 seconds to read, at most 60.
 It is a private draft and is never auto-posted. Source-linked findings include short explanations,
 A–F ratings and available model/thinking provenance. Missing evidence is not a proven defect.
 Actionable findings belong in source-line comments, not a general blocking PR body.
@@ -77,6 +98,21 @@ The [comment guide](prompts/pr-comments.md) requires explicit approval before in
 
 Run evidence lives in the configured Pi agent directory's `auto-review/<session-id>/`.
 Shared `structure.md`, `design.md`, and `framework.md` notes live in `auto-review/codebases/<codebase>/`.
+
+## Measuring the pack
+
+Every final review JSON records `collection` (`pack` or `diff-only`) and, for pack runs, the `sparsity_index` metrics
+(build time, anchors, edges, unresolved rate, inline and spilled tokens). Add the line `mode: diff-only` to a review's
+context to skip the index on purpose. Compare a few runs of each kind with wall time and findings:
+
+```sh
+for f in ~/.pi/agent/auto-review/*/*.review.json; do
+  jq -r 'select(.status == "complete") | [.collection, ((.completedAt | fromdateiso8601) - (.createdAt | fromdateiso8601)), (.findings | length), (.pack.unresolvedRate // "-")] | @tsv' "$f"
+done
+```
+
+A lower wall time with the same or more accepted findings is the result to look for; a rising unresolved rate says
+where the index needs another resolution rung.
 Entries link to their review, revision, and sources. Later runs revalidate useful notes and append corrections.
 
 For a requested re-review, the coordinator links the earlier assessment and reviews the fix plus affected boundaries.

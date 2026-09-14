@@ -195,12 +195,27 @@ test('prepared artifacts are private, readable, session-scoped and outside the p
     review.prompts.presentation,
     fileURLToPath(new URL('../prompts/presentation.md', import.meta.url)),
   );
+  assert.equal(
+    review.prompts.voice,
+    fileURLToPath(new URL('../prompts/voice.md', import.meta.url)),
+  );
+  assert.equal(
+    review.prompts.taste,
+    fileURLToPath(new URL('../prompts/taste.md', import.meta.url)),
+  );
   assert.equal(review.historyRoot, harness.storage);
   assert.equal(review.codebasesRoot, join(harness.storage, 'codebases'));
   for (const path of Object.values(review.prompts)) {
     assert.ok(readFileSync(path, 'utf8').length > 0);
   }
   assert.deepEqual(review.grades, { merge: null, deploy: null });
+  assert.equal(review.collection, null);
+  assert.equal(review.pack, null);
+  assert.equal(review.prContext, null);
+  assert.equal(
+    review.prompts.prContext,
+    fileURLToPath(new URL('../prompts/pr-context.md', import.meta.url)),
+  );
   assert.deepEqual(bugs.bugs, []);
   assert.deepEqual(bugs.findings, []);
 

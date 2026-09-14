@@ -6,7 +6,7 @@ Use fictional examples in packaged prompts. Actual PR/comment links belong to th
 
 ## 1. Write the human PR summary
 
-Read the accepted final assessment and its reconciliation, not just the raw `bugs` array. Follow `presentation.md`: check technical accuracy, then apply available user-voice guidance and a humanizer pass. Address the author directly and lead with what matters. Include context only when needed to understand the feedback, not a routine feature recap. Write no more than needed, at most 200 words. Return natural paragraphs without model attribution, ratings, template labels, a generic verdict or a blocker list. Store only that prose in the final review's `humanReadable` field.
+Read the accepted final assessment and its reconciliation, not just the raw `bugs` array. Write it under `voice.md`, then check it under `presentation.md`. Address the author directly and lead with what matters. Include context only when needed to understand the feedback, not a routine feature recap. Write no more than needed, at most 200 words. Return natural paragraphs without model attribution, ratings, template labels, a generic verdict or a blocker list. Store only that prose in the final review's `humanReadable` field.
 
 Keep the detailed evidence, grades and provenance alongside it in the structured report. Important failures still need an explanation in the summary; specific fixes belong at their source lines. Do not turn the summary into a general blocking review body.
 
@@ -20,28 +20,28 @@ Check each statement against the actual run before using this pattern. Do not co
 
 For each proposed inline comment:
 
-1. Resolve the submitted ID through the final map and reconciliation. Use the accepted interpretation, including corrections. Keep confirmed bugs, optional suggestions, inherited prerequisites and unconfirmed/refuted history distinct. Never infer acceptance from `blocks: true` in a raw historical record.
+1. Resolve the submitted ID through the final map and reconciliation. Use the accepted interpretation, including corrections. Keep confirmed bugs, questions for the author, optional suggestions, inherited prerequisites and unconfirmed/refuted history distinct. Never infer acceptance from `blocks: true` in a raw historical record.
 2. Verify repository, PR, reviewed head SHA and source location. Select an actual diff line and side (`RIGHT` for the new version, `LEFT` for a deletion). A file/symbol location alone is not enough. If a blocker cannot be anchored, retain it privately and report the placement gap; do not promote it to a general PR-body blocker.
-3. Draft a short comment from the finding's `humanReadable`, `rating`, `impact` and technical evidence. Include expected versus actual behavior, the smallest supported fix or missing proof, and whether verification was executed or only source-traced. Preserve origin and counterevidence. Apply the same available user-voice guidance and humanizer pass to the prose without changing the required format below. Do not repeat the full report.
+3. Draft a short comment from the finding's `humanReadable`, `rating`, `impact` and technical evidence. Write the opening as you would say it at the author's desk under `voice.md`; expected versus actual behavior, verification state, whether it is new in this PR and counterevidence go in the details block below it, also in plain sentences. Then check the claims under `presentation.md` without changing the required format below. Do not repeat the full report.
 4. Use the provenance of the assessment that supports this wording. The finding receipt's `reviewer` is runtime submission metadata; later reconciliations may have their own source-linked reviewer. Never credit a rewritten assessment to the original model without evidence. Render unavailable fields as `unavailable`, not a guessed name or thinking level.
+
+Both the opening and the details block follow `voice.md`, which shows the same finding written both ways for each part of this format. There is no title line: the comment opens with the sentence to the author, the way a review comment written by hand does. The finding's `title` stays in the map and the report; it is not posted.
 
 Use this Markdown inline format, with one literal A–F rating:
 
 ```markdown
-### {title}
-
-{Short, natural feedback to the author: the consequence and supported next step.}
+{Two to four short sentences to the author: what they would see go wrong, and what you would do or ask.}
 
 **Review details (for agents)**
 
-{Technical explanation, evidence state, origin when relevant, verification limits and smallest supported action. Support the opening rather than repeating it.}
+{The technical part in plain sentences: what the code does, what the tests cover, what you read versus ran, whether it is new in this PR, and what you would change. Support the opening rather than repeating it.}
 
 Pi auto-review - Model: {model}/{thinkingLevel} - Rate: {rating} **({blockingStatus})**
 ```
 
-Prefix every optional suggestion's title with `Nit: `, including optional findings recorded as `fix`. Other titles have no status prefix; never use `Blocking: ` in a title. Use `blocking` or `nonblocking` for `{blockingStatus}`, based on the accepted assessment, not the rating alone. Optional suggestions are always nonblocking. Keep the status and its parentheses bold: `**(blocking)**` or `**(nonblocking)**`.
+Start every optional suggestion's opening with `Nit: `, including optional findings recorded as `fix`. A `question` opens with the question itself and its details block says what would settle it, in one or two sentences. Confirmed bugs open with the consequence; never write `Blocking: ` anywhere in the prose. Use `blocking` or `nonblocking` for `{blockingStatus}`, based on the accepted assessment, not the rating alone. Optional suggestions are always nonblocking. Keep the status and its parentheses bold: `**(blocking)**` or `**(nonblocking)**`.
 
-Keep the author-facing feedback first, immediately below the title, without a `For human:` label. Follow it with the exact bold label `Review details (for agents)` and visible technical prose. Do not add `Impact:` or `Comment:` labels, `<details>` wrappers, or `<sub>` tags. Keep attribution and rating on the final line, using actual provenance rather than a fixed example model.
+No heading, no title line, no `For human:` label: the author-facing sentences come first. Follow them with the exact bold label `Review details (for agents)` and visible technical prose. Do not add `Impact:` or `Comment:` labels, `<details>` wrappers, or `<sub>` tags. Keep attribution and rating on the final line, using actual provenance rather than a fixed example model.
 
 The attribution and rating belong only to the inline draft, never to the human PR summary.
 

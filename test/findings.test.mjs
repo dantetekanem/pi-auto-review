@@ -114,6 +114,39 @@ test('records confirmed bugs separately from nonblocking optional findings', asy
   assert.equal(saved.createdAt, '2026-01-01T00:00:00.000Z');
 });
 
+test('records author questions and the taste lens that produced a finding', async t => {
+  const harness = createFindingsFixture(t);
+  harness.prepare();
+  const submit = await harness.register();
+
+  await submit({
+    sessionId: harness.sessionId,
+    runId,
+    finding: { ...createFinding('question'), lens: 'failure_paths', rating: 'C' },
+  });
+  await submit({ sessionId: harness.sessionId, runId, finding: { ...createFinding(), lens: 'naming' } });
+  const saved = readJson(harness.path(runId));
+
+  assert.equal(saved.findings.length, 1);
+  assert.equal(saved.findings[0].kind, 'question');
+  assert.equal(saved.findings[0].blocks, false);
+  assert.equal(saved.findings[0].lens, 'failure_paths');
+  assert.equal(saved.bugs.length, 1);
+  assert.equal(saved.bugs[0].lens, 'naming');
+
+  const before = readFileSync(harness.path(runId), 'utf8');
+  await assert.rejects(submit({
+    sessionId: harness.sessionId,
+    runId,
+    finding: { ...createFinding('nit'), lens: 'vibes' },
+  }), /lens/i);
+  assert.equal(readFileSync(harness.path(runId), 'utf8'), before);
+
+  const lens = submit.parameters.properties.finding.properties.lens;
+  assert.ok(lens.enum.includes('ownership'));
+  assert.ok(lens.enum.includes('tests_honesty'));
+});
+
 test('separate registrations share Pi queue and preserve concurrent submissions and other runs', async t => {
   const harness = createFindingsFixture(t);
   const otherRunId = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
@@ -201,7 +234,7 @@ test('offers a portable string enum and persists only declared location fields',
   const submit = await harness.register();
   const kind = submit.parameters.properties.finding.properties.kind;
   assert.equal(kind.type, 'string');
-  assert.deepEqual(kind.enum, ['bug', 'fix', 'nit']);
+  assert.deepEqual(kind.enum, ['bug', 'fix', 'nit', 'question']);
 
   const finding = createFinding('nit');
   await submit({

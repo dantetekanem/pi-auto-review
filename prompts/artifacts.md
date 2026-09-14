@@ -18,8 +18,8 @@ Every record has `id`, `kind`, `runId`, `repository`, `revision`, `state`, and `
 | `unit` | Zone, changed paths/symbols, requirement IDs, contract, relevant lenses/tests, required checks and owner. |
 | `edge` | From/to unit or symbol, relationship, hop depth, changed assumption, impact and resolution evidence. |
 | `evidence` | Linked units/criteria, what was inspected or executed, exact result, counterevidence and limits. |
-| `coverage` | Agent/zone, expected and received reports, searched scope, depth, stopping reason, unexplored frontier and failed/queued/omitted work. |
-| `finding` | Criterion/unit IDs, classification, evidence, impact, suggested smallest fix or missing proof, and whether introduced, expanded or pre-existing. |
+| `coverage` | Agent/zone, expected and received reports, searched scope, depth, stopping reason, unexplored frontier and failed/queued/omitted work. The collection-stage record also carries `pack`: the `sparsity_index` pack path, its `metrics.json` values (`elapsedMs`, `anchors`, `edges`, `unresolvedRate`, `tokens`) and the index/program notes, or `pack: null` with `collection: "diff-only"` when the index was skipped. |
+| `finding` | Criterion/unit IDs, classification, the `taste.md` lens that led to it, evidence, impact, suggested smallest fix or missing proof, and whether introduced, expanded or pre-existing. |
 | `learning` | Reusable claim, repository/symbol/behavior scope, evidence, last validated revision, confidence, invalidation conditions and superseded record IDs. |
 | `decision` | Criterion outcomes, complexity/reasons, requested grades/reasons, remaining conditions and coverage completeness. |
 
@@ -29,15 +29,16 @@ Use explicit states such as `observed`, `hypothesis`, `confirmed`, `refuted`, `u
 
 Call `agentic_code_review_append_finding` as soon as evidence confirms a bug. Supply the original invocation `sessionId` and `runId`, not the worker's own session ID, and a structured `finding`:
 
-- `kind`: `bug`, `fix` or `nit`. Bugs must be proven; fixes/nits are optional and always nonblocking.
-- `title`, `repository`, and `revision`: concise identity and the exact reviewed commit/range or diff fingerprint as a string.
+- `kind`: `bug`, `question`, `fix` or `nit`. Bugs must be proven. A `question` is for the author: its answer changes the assessment and the review could not settle it in budget; `humanReadable` is the question as you would ask it, `impact` what changes with the answer, `suggestedFix` what would settle it. Questions, fixes and nits are always nonblocking.
+- `lens`: optional; the `taste.md` lens that produced the lead. For a bug, the observation that surfaced it.
+- `title`: a short sentence naming what goes wrong, written under `voice.md`, not an instruction to fix it. `repository` and `revision`: the exact reviewed commit/range or diff fingerprint as a string.
 - `sourceIds`, `requirementIds`, `unitIds`: nonempty lists linking the supplied or reported evidence inventory. Keep the cited records in your report for the coordinator to accept into the map.
 - `location`: `{ path, symbol, startLine, endLine }`, with the actual source line range.
-- `humanReadable` and `rating`: a roughly 10-second human explanation (25–40 words, at most 400 characters) and one A–F letter under `presentation.md`. Required for runs marked `presentationVersion: 1`; supplied fields must be valid together on legacy runs too. The tool records actual submission-context `reviewer` provenance and returns it; never supply invented model/thinking metadata.
+- `humanReadable` and `rating`: at most 400 characters written under `voice.md` (what the author would see go wrong, then what you would do or ask) and one A–F letter under `presentation.md`. Required for runs marked `presentationVersion: 1`; supplied fields must be valid together on legacy runs too. The tool records actual submission-context `reviewer` provenance and returns it; never supply invented model/thinking metadata.
 - `impact` and `suggestedFix`: what breaks or could improve, why, and the smallest supported direction.
 - For a `bug`, also include `expected`, `actual`, `origin` (`introduced`, `expanded` or `pre-existing`), boolean `blocks`, `verification`, and nonempty `evidence: [{ source, detail }]`. Include prerequisites, reproduction or focused checks; label unexecuted reproduction steps. Verification must include revalidating changed source before a later fix.
 
-The tool returns a generated finding ID and artifact path. It preserves the prepared envelope, appends confirmed bugs with `status: "open"` to `bugs`, and appends optional fixes/nits with `blocks: false` to `findings`. It validates structure, not the truth of the claim. Never submit an unproven suspicion as a bug, invent evidence to satisfy fields, or duplicate an already returned ID. If the tool fails, record that gap in the report; do not edit the shared file as a fallback.
+The tool returns a generated finding ID and artifact path. It preserves the prepared envelope, appends confirmed bugs with `status: "open"` to `bugs`, and appends questions, fixes and nits with `blocks: false` to `findings`. It validates structure, not the truth of the claim. Never submit an unproven suspicion as a bug, invent evidence to satisfy fields, or duplicate an already returned ID. If the tool fails, record that gap in the report; do not edit the shared file as a fallback.
 
 At reconciliation, link returned IDs to map findings and check their evidence. Preserve corrections and refuted claims in the map and final assessment, referencing the submitted ID; do not erase history or call a refuted claim a confirmed blocker. Record the accepted humanReadable, rating, evidence state and source-linked reviewer on the correction without rewriting the submitted record. The final fixing handoff must distinguish accepted bugs from those corrections.
 
@@ -49,11 +50,13 @@ Preserve prepared metadata and add:
 
 - `status`: `complete` or `incomplete`; include `completedAt` only after the assessment finishes.
 - `repository`, `revision`, `problem`, and source-linked `criteria` with `met`, `partial`, `unmet` or `unclear` outcomes and evidence IDs.
-- `humanReadable`: the primary PR summary, addressed to the author and led by what matters in the accepted assessment, with context only where needed. Follow `presentation.md`: technical accuracy, available user-voice guidance and a humanizer pass; at most 200 words, without a minimum target. Only human prose belongs here, with no attribution/rating header, generic verdict or blocker list. This is a private draft, never an automated posting payload.
+- `humanReadable`: the primary PR summary, addressed to the author and led by what matters in the accepted assessment, with context only where needed. Write it under `voice.md`, then check it under `presentation.md`; at most 200 words, without a minimum target. Only human prose belongs here, with no attribution/rating header, generic verdict or blocker list. This is a private draft, never an automated posting payload.
 - `reviewer`: available runtime model/thinking provenance for this assessment, as defined in `presentation.md`; keep worker provenance with its report/coverage records.
 - `complexity`: score 1–5 plus a short reason.
 - `grades`: `merge` and `deploy`, each either null (not assessed) or `{ "grade": "safe|medium|risky", "rating": "A|B|C|D|E|F", "reason": "...", "conditions": [] }`. Choose one literal value for each field using `presentation.md`. Preserve the existing grade alongside the letter; do not re-grade historical artifacts.
 - `findings`: map/bug/optional-finding IDs with reconciliation corrections where needed; `coverage`: inspected zones, task/stage and report IDs, remaining frontier, check results and completeness.
+- `prContext`: for a pull request target, the object defined in `pr-context.md` section 4 (url, provider, number, title, head, base, draft, state, labels, checks with required states and staleness, thread counts by open/resolved/automated, linked issues, saved file names); `null` for a local diff.
+- `collection`: `"pack"` when a `sparsity_index` pack drove collection, `"diff-only"` when the run context asked to skip it or the tool was unavailable; `pack`: the pack path plus the `metrics.json` summary (`elapsedMs`, `anchors`, `edges`, `unresolvedRate`, `tokens`), or null. These two fields make runs comparable.
 - `uncertainties`, `approvalPath`, and paths to this run's map and bug handoff.
 - For runs with `codebasesRoot`, `codebases`: one entry per actual reviewed repository with its stable, credential-free `repository` identity, canonical absolute checkout `root`, and exact reviewed `revision` or diff fingerprint. Do not substitute the invoking cwd. Add each entry's `learning` status and saved paths after the save step below.
 

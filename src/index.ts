@@ -49,6 +49,9 @@ function prepareReview(
     'deep-collect': promptPath('deep-collect'),
     artifacts: promptPath('artifacts'),
     presentation: promptPath('presentation'),
+    voice: promptPath('voice'),
+    taste: promptPath('taste'),
+    prContext: promptPath('pr-context'),
   };
   for (const path of Object.values(prompts)) {
     accessSync(path);
@@ -108,6 +111,9 @@ function prepareReview(
       ...details,
       status: 'prepared',
       grades: { merge: null, deploy: null },
+      collection: null,
+      pack: null,
+      prContext: null,
     }],
   ];
 
