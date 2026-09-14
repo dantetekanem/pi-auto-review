@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-review",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Experimental multi-agent code review for Pi, with impact tracing, human-readable reports, and reusable codebase knowledge.",

@@ -97,7 +97,17 @@ Actionable findings belong in source-line comments, not a general blocking PR bo
 The [comment guide](prompts/pr-comments.md) requires explicit approval before inline posting; this package does not post.
 
 Run evidence lives in the configured Pi agent directory's `auto-review/<session-id>/`.
-Shared `structure.md`, `design.md`, and `framework.md` notes live in `auto-review/codebases/<codebase>/`.
+Shared `structure.md`, `design.md`, `framework.md`, `testing.md`, `pitfalls.md`, `decisions.md` and `methods.md` notes live in
+`auto-review/codebases/<codebase>/`.
+
+## Reviews that compound
+
+Each topic file carries one `current` block on top, the consolidated text the last finishing run wrote, above the
+append-only history of dated run entries. Intake calls `agentic_code_review_read_learning`, which returns only the
+current blocks, so the cost of remembering stays flat as runs accumulate. `decisions.md` keeps one line per settled
+question (symbol, claim, how it was settled, run, outcome) so a later review does not re-raise it unless that code changed;
+`methods.md` keeps what settled questions fastest and what wasted time in each component. At the end, the coordinator
+saves a rewritten current block and a delta per topic, and the review JSON records `learning: { reused, refuted, saved }`.
 
 ## Measuring the pack
 
@@ -118,7 +128,7 @@ done
 
 A lower wall time with the same or more accepted findings is the result to look for; a rising unresolved rate says
 where the index needs another resolution rung.
-Entries link to their review, revision, and sources. Later runs revalidate useful notes and append corrections.
+Entries link to their review, revision, and sources. Later runs revalidate the current blocks, fold corrections in, and keep the superseded claims in the history.
 
 For a requested re-review, the coordinator links the earlier assessment and reviews the fix plus affected boundaries.
 It reuses revalidated evidence, reports prior findings' outcomes, and targets 15 minutes within a 20-minute budget.

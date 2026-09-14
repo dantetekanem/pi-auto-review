@@ -130,6 +130,7 @@ test('installed Pi loader registers the review tools from a different cwd', asyn
   assert.deepEqual([...loaded.extensions[0].tools.keys()].sort(), [
     'agentic_code_review',
     'agentic_code_review_append_finding',
+    'agentic_code_review_read_learning',
     'agentic_code_review_save_learning',
   ]);
 });
@@ -213,6 +214,7 @@ test('prepared artifacts are private, readable, session-scoped and outside the p
   assert.equal(review.collectors, 0);
   assert.equal(review.pack, null);
   assert.equal(review.prContext, null);
+  assert.equal(review.learning, null);
   assert.equal(
     review.prompts.prContext,
     fileURLToPath(new URL('../prompts/pr-context.md', import.meta.url)),

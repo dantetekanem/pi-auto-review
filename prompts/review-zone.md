@@ -34,9 +34,10 @@ Include:
 - `outcome`: `reviewed`, `partial` or `unable`; never equate finishing a turn with reviewing the zone.
 - Each assigned criterion's expected/actual behavior and source-linked evidence.
 - Inspected scope, counterevidence, submitted finding IDs (bugs, questions, fixes, nits), leads followed that did not settle, and prior-finding reconciliation.
+- One line per `taste.md` lens: the finding IDs it produced, or what you checked under it and why nothing came of it. Run the bug-yield lenses first (boundaries, tests_honesty, ownership, tests_coverage, failure_paths, naming, data_access, business_rule) and follow their leads; then run the improvement lenses (simplify, duplication, idiom, comments, scope) as a quick pass and submit what they yield as nits or questions. Skipping the second pass is not finishing early; say so in `outcome: partial` if the budget ran out first.
 - For a follow-up, each assigned accepted prior finding's current outcome (`fixed`, `still present` or `unverified`), original run/finding IDs and current source/check evidence. Keep refuted/superseded history distinct; separate inherited checks from checks performed now.
 - `humanReadable`: what this zone does and where it falls short, written under the supplied `voice.md` and checked under the presentation contract; keep technical evidence separate.
-- A `safe`, `medium` or `risky` zone recommendation and matching A–F `rating` with reasons. If unable to assess, no recommendation and `rating: null`.
+- A `safe`, `medium` or `risky` zone recommendation and matching A–F `rating` with reasons that point at code (path and line, or a contract). Pending CI, an open stack parent or an unconfirmed deployment are conditions to list, not reasons for the letter. If unable to assess, no recommendation and `rating: null`.
 - `reviewer`: actual model/thinking metadata from this session's available runtime evidence or null for unavailable fields, with its source link. Do not copy a configured tier or another agent's identity.
 - Missing proof and any exact tool/environment failure, including the failed action and what remained possible.
 

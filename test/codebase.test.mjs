@@ -78,8 +78,11 @@ function createLearningFixture(t) {
     const tools = new Map();
     registerCodebaseLearning({ registerTool: tool => tools.set(tool.name, tool) }, storage);
 
-    return (request = input, signal) => tools.get('agentic_code_review_save_learning')
+    const save = (request = input, signal) => tools.get('agentic_code_review_save_learning')
       .execute('call', request, signal, undefined, {});
+    save.read = (request = { root: repo, repository: input.repository }) => tools.get('agentic_code_review_read_learning')
+      .execute('call', request, undefined, undefined, {});
+    return save;
   };
 
   return { dir, storage, repo, input, directory, prepare, register };
@@ -217,6 +220,68 @@ test('keeps unrelated repositories with the same folder name from sharing notes'
   const partial = readTopicFiles(harness.directory);
   await assert.rejects(save({ ...other, notes: createNotes('other repository') }), /different repository/i);
   assert.deepEqual(readTopicFiles(harness.directory), partial);
+});
+
+test('replaces the current block per topic, keeps the run history and reads back only the current blocks', async t => {
+  const harness = createLearningFixture(t);
+  const save = await harness.register();
+  harness.prepare();
+
+  const legacy = join(harness.directory, 'structure.md');
+  mkdirSync(harness.directory, { recursive: true });
+  writeFileSync(legacy, '<!-- repository: "owner/repo" -->\n# structure\n\n<!-- review: old/run 0000 -->\n## 2025-12-31T00:00:00.000Z | 00000000-0000-4000-8000-000000000000\n\nRevision: old123\nReview: /old\nMap: /old.map\nSources: S-old\n\nLegacy append-only entry.\n');
+
+  const empty = await save.read();
+  assert.match(empty.content[0].text, /no current block yet; 1 runs in history/);
+
+  const first = {
+    ...harness.input,
+    notes: topics.map(topic => ({ topic, current: `${topic} current one`, delta: `${topic} delta one`, sourceIds: [`S-${topic}`] })),
+  };
+  const saved = await save(first);
+  assert.equal(saved.details.current.structure.owner, 'session-1/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
+  let structure = readFileSync(legacy, 'utf8');
+  assert.ok(structure.startsWith('<!-- repository: "owner/repo" -->\n# structure\n\n<!-- current: session-1/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 abc123 '));
+  assert.ok(structure.includes('structure current one\n<!-- /current -->\n'));
+  assert.ok(structure.includes('Legacy append-only entry.'), 'the legacy history survives');
+  assert.ok(structure.includes('structure delta one'));
+
+  const second = {
+    ...first,
+    sessionId: 'session-2',
+    runId: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    notes: [
+      ...topics.map(topic => ({ topic, current: `${topic} current two`, delta: `${topic} delta two`, sourceIds: [`S-${topic}`] })),
+      { topic: 'decisions', current: 'app/models/shop.rb#frozen? — frozen shops skip billing — settled by author reply — run two — accepted', delta: 'First decision recorded.', sourceIds: ['F-1'] },
+    ],
+  };
+  harness.prepare(second, { revision: 'def456', codebases: [{ repository: second.repository, root: harness.repo, revision: 'def456' }] });
+  await save(second);
+  structure = readFileSync(legacy, 'utf8');
+  assert.ok(structure.includes('<!-- current: session-2/b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 def456 '));
+  assert.ok(!structure.includes('structure current one'), 'the previous current block is replaced');
+  assert.ok(structure.includes('structure delta one') && structure.includes('structure delta two'), 'history keeps both runs');
+  assert.equal((structure.match(/<!-- current: /g) ?? []).length, 1);
+
+  const before = readTopicFiles(harness.directory);
+  await save(second);
+  assert.deepEqual(readTopicFiles(harness.directory), before, 'an identical retry changes nothing');
+  await assert.rejects(save({ ...second, notes: second.notes.map(note => ({ ...note, current: `${note.current} edited` })) }), /already saved/i);
+  await save({ ...second, notes: second.notes.map(({ current, ...note }) => note) });
+  assert.deepEqual(readTopicFiles(harness.directory), before, 'a retry without current blocks keeps the saved ones');
+
+  const read = await save.read();
+  assert.match(read.content[0].text, /## decisions \(current from session-2\/b0eebc99[^)]*def456; 1 runs in history\)\n\napp\/models\/shop\.rb#frozen\?/);
+  assert.match(read.content[0].text, /## structure \(current from session-2[^)]*; 3 runs in history\)\n\nstructure current two\n/);
+  assert.ok(!read.content[0].text.includes('delta'), 'history bodies stay out of the read');
+  const summary = read.details.topics.find(item => item.topic === 'structure');
+  assert.equal(summary.runs, 3);
+  assert.equal(summary.latestRun.run, 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
+  assert.equal(summary.current.revision, 'def456');
+
+  const other = await save.read({ root: harness.repo, repository: 'someone/else' });
+  assert.match(other.content[0].text, /holds notes for another repository/);
+  assert.deepEqual(other.details.topics, []);
 });
 
 test('fails closed on a held lock, linked topic or storage inside the reviewed tree', async t => {

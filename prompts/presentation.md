@@ -2,17 +2,22 @@
 
 Use this contract for collector handoffs, zone assessments, findings and the final review. It describes presentation, not permission to publish or a substitute for technical evidence.
 
+The report exists so the person who asked understands the change and can decide what to do next. It is not a defect ledger and not a process log. Order everything by what changes the reader's decision; say the judgment, then the evidence; leave out how the run went unless it limits what the reader can trust. Sentences such as "runtime completed" or "assessment delivered as inventory" never reach the reader.
+
 ## Complete report in the main conversation
 
 The coordinator delivers the complete review handoff to the agent that called `agentic_code_review` (or the invoking session's main agent for `/code-review`), then exits. The calling agent owns the user-facing report and all follow-up interaction. The saved review is the primary source for the presentation and follow-up answers. Before presenting, the calling agent must read the supplied `.review.json`, `.bugs.json` and relevant linked `.map.jsonl` records, even when the handoff looks complete. Verify the run/revision and completion status, and apply final reconciliation to historical findings. Disclose missing, unreadable or incomplete records rather than claiming a verified complete review; label any handoff-only claims. The handoff's detail is not subject to the user-facing word limit.
 
 The calling agent's main report must help the user understand the PR, not just decide whether it is safe. Write it for a maximum three-minute read: at most 500 words for the entire initial visible report, including findings, references and follow-up options. Use plain language and readable headings. Keep detailed evidence and comment drafts in the artifacts for follow-up; do not dump JSON or the evidence map.
 
-The calling agent uses those saved records to write these sections in its visible response:
-- What the PR does: the problem it addresses, observable behavior before and after, and how the important parts work together. Explain the overall understanding of the change, including important preserved behavior or trade-offs. Distinguish verified behavior from inferred intent; disclose what could not be understood.
-- What was analyzed: reviewed target and exact revision, important paths/contracts and failure cases examined, actual checks and results, and untested areas. One sentence on how context was gathered: the pack's anchors, edges, unresolved rate and build time, whether any collector ran and for which gaps, or that the run was diff-only. For a pull request, one sentence on the CI state (required checks, stale or current) and one on how existing threads were handled (reconciled, reopened, or none). Keep source references and available reviewer provenance concise.
-- Findings and assessment: accepted findings with impact, source file/line references, blocking status and supported next steps; requested verdicts and A-F ratings with reasons. Separate questions for the author, optional improvements and refuted or unconfirmed concerns from confirmed defects. When a bug carries a `lens`, say what observation led to it; that is the part the author learns from. State when no accepted findings remain or an assessment was not requested.
-- Limits and next steps: completion status, uncertainties, approval conditions and supporting artifact paths. Preserve every material blocker and coverage gap within the word budget. Group related findings when needed and state how many individual comments are available for follow-up; never hide a blocker to shorten the report.
+The calling agent uses those saved records to write these sections in its visible response, in this order:
+- What this change is: the problem it addresses, observable behavior before and after, and how the important parts work together, including preserved behavior and trade-offs. Distinguish verified behavior from inferred intent; disclose what could not be understood.
+- My read: whether this is the right change and what is good about it, then the requested verdicts with their A–F ratings and the reason in code terms, with the path and line or contract that carries any risk. Separate confirmed defects from questions for the author and from refuted or unconfirmed concerns. When a bug carries a `lens`, say what observation led to it; that is the part the author learns from.
+- What to fix, ask or improve: accepted bugs with impact, source references and the smallest useful fix; the questions for the author; then every accepted nit and optional fix with its lens and path:line, even when there is no bug. When there is no bug and no improvement, list what each lens checked instead, so the reader can trust the nothing.
+- Settled along the way: one line each for the questions the coordinator settled itself (question, answer, evidence), the dangling definitions, and the existing threads reconciled.
+- Before merging: the process conditions with their owner (CI with its required checks and whether they are current, stack parent, approvals), kept apart from the rating. Then one line on what would make the change an A, when it is not one.
+- How I looked and what I could not see: the exact revision, the contracts and failure cases examined, checks run and their results, untested areas; one sentence on how context was gathered (the pack's anchors, edges, unresolved rate and build time, whether a collector ran and for which gaps, or diff-only); one sentence on what earlier reviews contributed and what this run added to the codebase notes.
+- Limits: completion status, uncertainties and the artifact path. Preserve every material blocker and coverage gap within the word budget. Group related findings when needed and state how many individual comments are available for follow-up; never hide a blocker to shorten the report.
 
 The calling agent ends its report with these four choices and waits for the user's selection. The coordinator does not offer choices or wait for a reply:
 1. Review each comment together, one at a time.
@@ -58,7 +63,7 @@ Ratings describe the safety of the stated scope under the available evidence. Th
 | A | Safest supported assessment: criteria met, material scope examined, no accepted issue remains. This is not a guarantee. | safe |
 | B | Criteria met; only minor, nonblocking improvements remain. | safe |
 | C | Bounded residual risk or an unconfirmed concern needs a named precaution or further proof; no blocking defect is established by this letter. | medium |
-| D | Do not proceed on present evidence: a blocking defect, unmet essential criterion or material coverage gap remains. Say which. | risky |
+| D | Do not proceed on present evidence: a blocking defect, an unmet criterion the code was meant to satisfy, or a coverage gap inside the reviewed scope remains. Say which and where (path and line, or contract). Pending CI, an open stack parent, a missing approval or an unconfirmed deployment are conditions under the grade, not reasons for this letter. | risky |
 | E | A confirmed serious failure threatens important functionality, data integrity, security or availability. | risky |
 | F | Worst: a confirmed critical failure has catastrophic or irreversible consequences under a supported scenario. | risky |
 

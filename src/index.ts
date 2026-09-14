@@ -115,6 +115,7 @@ function prepareReview(
       collectors: 0,
       pack: null,
       prContext: null,
+      learning: null,
     }],
   ];
 
