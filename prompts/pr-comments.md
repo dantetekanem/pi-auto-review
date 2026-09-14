@@ -25,25 +25,29 @@ For each proposed inline comment:
 3. Draft a short comment from the finding's `humanReadable`, `rating`, `impact` and technical evidence. Include expected versus actual behavior, the smallest supported fix or missing proof, and whether verification was executed or only source-traced. Preserve origin and counterevidence. Apply the same available user-voice guidance and humanizer pass to the prose without changing the required format below. Do not repeat the full report.
 4. Use the provenance of the assessment that supports this wording. The finding receipt's `reviewer` is runtime submission metadata; later reconciliations may have their own source-linked reviewer. Never credit a rewritten assessment to the original model without evidence. Render unavailable fields as `unavailable`, not a guessed name or thinking level.
 
-Use this inline format, with one literal A–F rating:
+Use this Markdown inline format, with one literal A–F rating:
 
-```text
-Reviewed by Pi - Model: {model}/{thinkingLevel}. Auto-review tooling analysis.
+```markdown
+### {title}
 
-For human: {short, plain-language consequence and supported next step}
+{Short, natural feedback to the author: the consequence and supported next step.}
 
---
+**Review details (for agents)**
 
-Impact: {rating} - {evidence state, origin when relevant, and consequence}
+{Technical explanation, evidence state, origin when relevant, verification limits and smallest supported action. Support the opening rather than repeating it.}
 
-Comment: {technical explanation, evidence, verification limits and smallest supported action}
+Pi auto-review - Model: {model}/{thinkingLevel} - Rate: {rating} **({blockingStatus})**
 ```
 
-The header and rating belong only to the inline draft, never to the human PR summary.
+Prefix every optional suggestion's title with `Nit: `, including optional findings recorded as `fix`. Other titles have no status prefix; never use `Blocking: ` in a title. Use `blocking` or `nonblocking` for `{blockingStatus}`, based on the accepted assessment, not the rating alone. Optional suggestions are always nonblocking. Keep the status and its parentheses bold: `**(blocking)**` or `**(nonblocking)**`.
+
+Keep the author-facing feedback first, immediately below the title, without a `For human:` label. Follow it with the exact bold label `Review details (for agents)` and visible technical prose. Do not add `Impact:` or `Comment:` labels, `<details>` wrappers, or `<sub>` tags. Keep attribution and rating on the final line, using actual provenance rather than a fixed example model.
+
+The attribution and rating belong only to the inline draft, never to the human PR summary.
 
 ### Unconfirmed history example
 
-Suppose a dispatch finding was corrected because no practical overlapping-dispatch failure was established. A short human field could say:
+Suppose a dispatch finding was corrected because no practical overlapping-dispatch failure was established. The opening feedback could say:
 
 > The code checks whether the agent is idle before loading inventory. We haven't shown that overlapping dispatch can actually happen, so this is history to investigate, not a reason to change the code.
 
