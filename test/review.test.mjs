@@ -43,6 +43,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
   const commands = new Map();
   const tools = new Map();
   const messages = [];
+  const userMessages = [];
   const notices = [];
   const confirmations = [];
   const execCalls = [];
@@ -65,6 +66,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
     registerCommand: (name, definition) => commands.set(name, definition),
     registerTool: definition => tools.set(definition.name, definition),
     sendMessage: (message, options) => messages.push({ message, options }),
+    sendUserMessage: (message, options) => userMessages.push({ message, options }),
     exec: async (command, args, options) => {
       execCalls.push({ command, args, options });
       return behavior.execute(command, args, options);
@@ -99,7 +101,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
   });
 
   return {
-    dir, storage, cwd, pi, commands, tools, messages, notices, confirmations, execCalls, eventHandlers, behavior, ctx,
+    dir, storage, cwd, pi, commands, tools, messages, userMessages, notices, confirmations, execCalls, eventHandlers, behavior, ctx,
     command: context => commands.get('code-review').handler(context, ctx),
     tool: (context = '', signal) => tools.get('agentic_code_review').execute('call-1', { context }, signal, undefined, ctx),
     complete: input => tools.get('agentic_code_review_complete').execute('complete-1', input, undefined, undefined, ctx),
@@ -239,23 +241,21 @@ test('provider metadata or commit failures launch from a saved provider patch in
   assert.match(readFileSync(commit.details.paths.patch, 'utf8'), /\+fallback/);
 });
 
-test('slash command shows the resolved preflight before confirmation and creates nothing when declined', async t => {
+test('slash command sends one direct review request without preflight or launch work', async t => {
   const harness = createReviewFixture(t);
-  harness.behavior.confirm = false;
   await harness.command('https://github.com/owner/repo/pull/7');
 
-  assert.equal(harness.confirmations.length, 1);
-  assert.match(harness.confirmations[0][1], /GitHub change/);
-  assert.match(harness.confirmations[0][1], /Model: openai\/gpt-test/);
-  assert.match(harness.confirmations[0][1], /Thinking: medium/);
-  assert.equal(harness.execCalls.filter(item => item.command === 'herdr').length, 0);
+  assert.deepEqual(harness.userMessages, [{
+    message: 'Review this code.\n\nhttps://github.com/owner/repo/pull/7',
+    options: undefined,
+  }]);
+  assert.equal(harness.confirmations.length, 0);
+  assert.equal(harness.execCalls.length, 0);
+  assert.equal(harness.messages.length, 0);
   assert.equal(exists(dirname(harness.storage)), false);
 
-  harness.behavior.confirm = true;
-  await harness.command('https://github.com/owner/repo/pull/7');
-  assert.equal(harness.messages.length, 1);
-  assert.equal(harness.messages[0].options.triggerTurn, false);
-  assert.match(harness.messages[0].message.content[0].text, /Session: review-/);
+  await harness.command('');
+  assert.equal(harness.userMessages[1].message, 'Review the current changes.');
 });
 
 test('prepared artifacts are private and completion wakes the invoking session exactly once', async t => {

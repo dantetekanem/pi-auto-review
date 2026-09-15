@@ -31,7 +31,9 @@ Run this from the codebase you want reviewed:
 /code-review https://github.com/owner/repo/pull/123
 ```
 
-Agents can also call `agentic_code_review` with plain-text context. The extension preflights the target, exact range, active model and `medium` thinking, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one parallel review wave, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane.
+`/code-review` sends one short review request to the current Pi session. The command does not preflight the target, ask for confirmation, or launch a pane. The current agent decides how to handle the request.
+
+Agents can call `agentic_code_review` with plain-text context when they need the automatic review workflow. That tool preflights the target, exact range, active model and `medium` thinking, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one parallel review wave, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane.
 
 For a pull request URL the review session first pulls the PR itself through the provider's CLI (`gh` for github.com, `gs` for Meteorite), read-only: the description becomes a requirement source, existing review threads and bot comments become evidence to reconcile rather than repeat, and CI becomes a process condition. The [PR context contract](prompts/pr-context.md) has the commands and record shapes.
 

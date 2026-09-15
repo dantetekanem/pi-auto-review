@@ -366,26 +366,10 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   });
 
   pi.registerCommand('code-review', {
-    description: 'Preflight and start an automatic review in a dedicated visible Pi pane; optional context is plain text.',
-    handler: async (context, ctx) => {
-      try {
-        const preflight = await preflightReview(pi, ctx, context, root);
-        const sessionId = ctx.sessionManager.getSessionId();
-        if (!sessionId || sessionId.length > 128 || /[^A-Za-z0-9_-]/.test(sessionId)) throw new Error('Invalid review session ID.');
-        const runId = randomUUID();
-        const artifact = join(root, sessionId, `${runId}.review.json`);
-        if (ctx.hasUI && !(await ctx.ui.confirm('Start auto-review?', formatPreflight(preflight, artifact)))) return;
-        const result = await launch(context, ctx, ctx.signal, preflight, runId);
-        pi.sendMessage({
-          customType: 'agentic-code-review',
-          content: result.content,
-          details: result.details,
-          display: true,
-        }, { triggerTurn: false });
-      } catch (error) {
-        if (!ctx.hasUI) throw error;
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error');
-      }
+    description: 'Ask the current Pi session to review code; optional context is plain text.',
+    handler: context => {
+      const reviewContext = context.trim();
+      pi.sendUserMessage(reviewContext ? `Review this code.\n\n${reviewContext}` : 'Review the current changes.');
     },
   });
 
