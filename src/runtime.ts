@@ -296,7 +296,8 @@ export const missionPrompt = (missionPath: string) => `Read the complete auto-re
 const REVIEW_TOOLS = [
   'read', 'bash', 'edit', 'write',
   'agentic_code_review_append_finding', 'agentic_code_review_read_learning', 'agentic_code_review_save_learning', 'agentic_code_review_complete',
-  'sparsity_scan', 'sparsity_collect', 'agentic_code_review_wave',
+  'sparsity_scan', 'sparsity_collect',
+  'spawn_swarm_agents', 'get_agent_status', 'check_teammate', 'stop_teammate', 'read_inbox',
   'ask_user', 'ask_user_batch',
 ].join(',');
 

@@ -32,17 +32,18 @@ Call `sparsity_scan` once with the exact range and no root override. The pack su
 
 If scanning is unavailable, continue from the saved provider patch or one local diff. The scan accelerates review; it is not a completion dependency.
 
-## Review wave
+## Review batch
 
-Call `agentic_code_review_wave` once with:
+Call `spawn_swarm_agents` from pi-extended-teams once with:
 
-- at most two `read-review` workers;
-- at most one `read-collect` worker for a closed list of criterion-bearing gaps;
-- the preflighted model at `medium`;
-- exact unit IDs, pack section ranges and assigned questions;
-- read-only tools.
+- `completion_group: { delivery: "all-settled" }`;
+- at most two `read-review` lanes;
+- at most one `read-collect` lane for a closed list of criterion-bearing gaps;
+- `model_slot` per lane; the configured tiers run both at `medium`;
+- exact unit IDs, pack section ranges, assigned questions and the run's session/run IDs;
+- `defaults.cwd` set to the reviewed checkout.
 
-The wave returns every report directly. A one-hour process safety fuse stops a truly stuck worker. Failed or stopped workers return their assigned items in `unfinished`; the top-level session completes those items directly. There is no worker retry or second wave.
+End the turn after spawning. The grouped report resumes the session with every lane's full report and settlement state. A lane that ends partial, unable, blocked, failed, cancelled, interrupted or stopped leaves its assigned items unfinished; the top-level session completes those items directly. There is no lane retry or second batch. One `get_agent_status` snapshot is allowed; `check_teammate` follows a suspected stall and `stop_teammate` is only for a truly stuck lane.
 
 ## Synthesis
 
@@ -59,7 +60,7 @@ The wave returns every report directly. A one-hour process safety fuse stops a t
 - Model mismatch: ask for a medium-capable model in the visible pane and resume.
 - Provider input unavailable: use the available metadata/patch and ask once only when a decision-changing input is required.
 - Scan failure: review diff-only.
-- Worker failure: top-level session completes its assigned items.
+- Lane failure or stop: top-level session completes its assigned items.
 - Session exits without a marker: parent watchdog resumes a pane session; if unavailable, launch one fallback session. A `/code-review` run in the current session has no watchdog; the user resumes it by asking.
 - Herdr unavailable: use the headless review session.
 - Parent reload: reattach to durable completion markers and deliver each handoff once. Pane runs without a marker get a fallback session; current-session runs only get their watcher back.

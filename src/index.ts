@@ -19,7 +19,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerFindings } from './findings.ts';
 import { registerCodebaseLearning } from './codebase.ts';
-import { registerReviewWave } from './wave.ts';
 import {
   completionFileName,
   formatPreflight,
@@ -284,7 +283,6 @@ function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
 export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
   registerFindings(pi, root);
   registerCodebaseLearning(pi, root);
-  registerReviewWave(pi);
 
   pi.registerTool({
     name: 'agentic_code_review_complete',

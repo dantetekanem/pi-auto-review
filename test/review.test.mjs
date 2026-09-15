@@ -146,7 +146,6 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_complete',
     'agentic_code_review_read_learning',
     'agentic_code_review_save_learning',
-    'agentic_code_review_wave',
   ]);
 });
 
@@ -180,8 +179,9 @@ test('tool preflights the current model at medium and starts one visible Pi pane
   assert.equal(start.args[start.args.indexOf('--thinking') + 1], 'medium');
   assert.ok(start.args.includes('--no-skills') && start.args.includes('--no-context-files'));
   const toolList = start.args[start.args.indexOf('--tools') + 1];
-  assert.match(toolList, /agentic_code_review_wave/);
-  assert.doesNotMatch(toolList, /spawn_swarm_agents|spawn_agent,|get_agent_status|task_create|task_list|read-critical|read-analyze|agentic_code_review,/);
+  assert.match(toolList, /spawn_swarm_agents/);
+  assert.match(toolList, /get_agent_status/);
+  assert.doesNotMatch(toolList, /agentic_code_review_wave|spawn_agent,|report_and_exit|task_create|task_list|read-critical|read-analyze|agentic_code_review,/);
 
   const prompt = call(harness, 'herdr', ['agent', 'prompt']);
   assert.equal(prompt.args.at(-1), `Read the complete auto-review mission at ${result.details.paths.mission} and execute it now.`);
@@ -491,26 +491,29 @@ test('parallel invocations stay isolated and two failed pane starts recover thro
   assert.equal(harness.execCalls.filter(item => item.command === 'herdr' && item.args[0] === 'pane' && item.args[1] === 'close').length, 2);
 });
 
-test('workflow encodes one medium parallel wave and only the two low review tiers', () => {
+test('workflow encodes one extended-teams batch and only the two low review tiers', () => {
   const workflow = readFileSync(fileURLToPath(new URL('../prompts/workflow.md', import.meta.url)), 'utf8');
   const zone = readFileSync(fileURLToPath(new URL('../prompts/review-zone.md', import.meta.url)), 'utf8');
   const runtime = readFileSync(fileURLToPath(new URL('../src/runtime.ts', import.meta.url)), 'utf8');
   const presentation = readFileSync(fileURLToPath(new URL('../prompts/presentation.md', import.meta.url)), 'utf8');
 
-  assert.match(workflow, /call `agentic_code_review_wave` exactly once/);
-  assert.match(workflow, /at most two `read-review` workers plus at most one `read-collect`/);
-  assert.match(workflow, /current preflighted model at `medium`/);
-  assert.match(workflow, /`timeout_seconds: 3600`/);
+  assert.match(workflow, /call `spawn_swarm_agents` from pi-extended-teams exactly once/);
+  assert.match(workflow, /completion_group: \{ delivery: "all-settled" \}/);
+  assert.match(workflow, /at most two `read-review` lanes plus at most one `read-collect`/);
+  assert.match(workflow, /run `read-review` and `read-collect` at `medium`/);
+  assert.match(workflow, /end the turn; the grouped report resumes this session/);
   assert.match(workflow, /The top-level review session takes those items and completes them directly/);
+  assert.doesNotMatch(workflow, /agentic_code_review_wave|timeout_seconds|four minutes/);
   assert.match(workflow, /Timing is measurement for later optimization, never a work limit/);
   assert.match(workflow, /If the scan fails, record the reason and continue diff-only/);
   assert.match(workflow, /ask once with `ask_user`.*resume from the answer, and finish/s);
   assert.match(workflow, /Build `commentDrafts` with one exact full `pr-comments\.md` body per accepted finding/);
   assert.doesNotMatch(workflow, /read-critical|read-analyze/);
-  assert.match(workflow, /no second wave/i);
+  assert.match(workflow, /no second batch/i);
   assert.match(zone, /never read the whole pack or whole diff/);
   assert.match(zone, /Stay under twelve direct file reads/);
-  assert.doesNotMatch(runtime, /'spawn_agent'|'get_agent_status'|'task_create'|'task_list'/);
+  assert.match(runtime, /'spawn_swarm_agents'/);
+  assert.doesNotMatch(runtime, /'spawn_agent'|'agentic_code_review_wave'|'task_create'|'task_list'/);
   assert.match(presentation, /render every accepted bug, question, nit and optional fix in full/);
   assert.match(presentation, /Do not paraphrase, group, truncate or replace comments with a count/);
   assert.match(presentation, /exact proposed comment blocks do not count toward that limit/i);
