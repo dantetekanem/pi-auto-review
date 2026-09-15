@@ -162,7 +162,7 @@ const schema = Type.Object({
     kind: Type.String({ enum: [...kinds] }),
     lens: Type.Optional(Type.String({
       enum: [...lenses],
-      description: 'The taste lens from taste.md that produced this lead. For a bug, the observation that surfaced it.',
+      description: 'The taste lens from taste.md that produced this lead. For a bug, the observation that surfaced it. Read taste.md at the path in your mission, or with agentic_code_review_read_prompt name "taste"; do not search for it.',
     })),
     sourceIds: Type.Array(Type.String()),
     requirementIds: Type.Array(Type.String()),

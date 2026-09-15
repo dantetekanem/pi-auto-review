@@ -40,8 +40,11 @@ Call `spawn_swarm_agents` from pi-extended-teams once with:
 - at most two `read-review` lanes;
 - at most one `read-collect` lane for a closed list of criterion-bearing gaps;
 - `model_slot` per lane; the configured tiers run both at `medium`;
-- exact unit IDs, pack section ranges, assigned questions and the run's session/run IDs;
+- a fixed header per lane: run-local paths of its contract, `taste.md`, `voice.md`, `pr-comments.md` and `presentation.md` from `review.json.prompts`, the session/run IDs, repository, revision and pack path;
+- exact unit IDs, pack section ranges and assigned questions;
 - `defaults.cwd` set to the reviewed checkout.
+
+Prepare copies the lane prompts to `<run>.prompts/` so each run freezes the text it used. A lane missing a path calls `agentic_code_review_read_prompt` by name; it never searches for prompt files.
 
 End the turn after spawning. The grouped report resumes the session with every lane's full report and settlement state. A lane that ends partial, unable, blocked, failed, cancelled, interrupted or stopped leaves its assigned items unfinished; the top-level session completes those items directly. There is no lane retry or second batch. One `get_agent_status` snapshot is allowed; `check_teammate` follows a suspected stall and `stop_teammate` is only for a truly stuck lane.
 

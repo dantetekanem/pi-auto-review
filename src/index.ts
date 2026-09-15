@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   unlinkSync,
   watch,
   writeFileSync,
@@ -31,6 +32,8 @@ import {
 
 const promptPath = (name: string) => fileURLToPath(new URL(`../prompts/${name}.md`, import.meta.url));
 const readPrompt = (name: string) => readFileSync(promptPath(name), 'utf8');
+const LANE_PROMPTS = ['review-zone', 'collect', 'taste', 'voice', 'pr-comments', 'presentation'] as const;
+type LanePrompt = typeof LANE_PROMPTS[number];
 type ReviewSessionMode = 'pane' | 'current';
 function prepareReview(
   pi: ExtensionAPI,
@@ -53,25 +56,28 @@ function prepareReview(
     throw new Error('Invalid review session ID.');
   }
 
-  const prompts = {
-    workflow: promptPath('workflow'),
-    collect: promptPath('collect'),
-    reviewZone: promptPath('review-zone'),
-    artifacts: promptPath('artifacts'),
-    presentation: promptPath('presentation'),
-    voice: promptPath('voice'),
-    taste: promptPath('taste'),
-    prContext: promptPath('pr-context'),
-    session: promptPath('session-launch'),
-  };
-  for (const path of Object.values(prompts)) {
-    accessSync(path);
+  for (const name of ['workflow', 'artifacts', 'pr-context', 'session-launch', ...LANE_PROMPTS]) {
+    accessSync(promptPath(name));
   }
   const launch = readPrompt('session-launch');
 
   const runId = preparedRunId ?? randomUUID();
   const directory = join(root, sessionId);
   const name = `review-${runId.slice(0, 8)}`;
+  const lanePromptDirectory = join(directory, `${runId}.prompts`);
+  const lanePrompt = (prompt: LanePrompt) => join(lanePromptDirectory, `${prompt}.md`);
+  const prompts = {
+    workflow: promptPath('workflow'),
+    collect: lanePrompt('collect'),
+    reviewZone: lanePrompt('review-zone'),
+    artifacts: promptPath('artifacts'),
+    presentation: lanePrompt('presentation'),
+    voice: lanePrompt('voice'),
+    taste: lanePrompt('taste'),
+    prComments: lanePrompt('pr-comments'),
+    prContext: promptPath('pr-context'),
+    session: promptPath('session-launch'),
+  };
   const paths = {
     map: join(directory, `${runId}.map.jsonl`),
     bugs: join(directory, `${runId}.bugs.json`),
@@ -81,6 +87,7 @@ function prepareReview(
     prContext: join(directory, `${runId}.pr-context.json`),
     patch: join(directory, `${runId}.patch`),
     mission: join(directory, `${runId}.mission.md`),
+    prompts: lanePromptDirectory,
     complete: join(directory, completionFileName(runId)),
   };
   const metadata = {
@@ -149,6 +156,7 @@ function prepareReview(
 
   const textFiles: Array<[string, string]> = [
     [paths.mission, mission],
+    ...LANE_PROMPTS.map((prompt): [string, string] => [lanePrompt(prompt), readPrompt(prompt)]),
     ...(intake ? [
       [paths.pr, `# ${preflightRecord.title ?? preflightRecord.target}\n\n${intake.body}`],
       [paths.threads, intake.threads || `No review-thread text fetched.\n${intake.gaps.join('\n')}`],
@@ -159,7 +167,10 @@ function prepareReview(
 
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const created: string[] = [];
+  let createdPromptDirectory = false;
   try {
+    mkdirSync(lanePromptDirectory, { mode: 0o700 });
+    createdPromptDirectory = true;
     for (const [path, data] of files) {
       const fd = openSync(path, 'wx', 0o600);
       created.push(path);
@@ -178,6 +189,7 @@ function prepareReview(
     for (const path of created) {
       unlinkSync(path);
     }
+    if (createdPromptDirectory) rmSync(lanePromptDirectory, { recursive: true, force: true });
     throw error;
   }
 
@@ -283,6 +295,21 @@ function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
 export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
   registerFindings(pi, root);
   registerCodebaseLearning(pi, root);
+
+  pi.registerTool({
+    name: 'agentic_code_review_read_prompt',
+    label: 'Read review prompt',
+    description: 'Return one pi-auto-review prompt by name: review-zone (zone reviewer contract), collect (gap collector contract), taste (the lens catalog behind the finding `lens` field), voice (how to write humanReadable text), pr-comments (inline comment body format) or presentation (report contract). Call this when a mission refers to one of these files without a path. Never search the filesystem for them.',
+    parameters: Type.Object({
+      name: Type.Union(LANE_PROMPTS.map(prompt => Type.Literal(prompt)), { description: 'Prompt name.' }),
+    }),
+    async execute(_id, { name }, signal) {
+      signal?.throwIfAborted();
+      if (!LANE_PROMPTS.includes(name)) throw new Error(`Unknown review prompt: ${String(name)}`);
+      const path = promptPath(name);
+      return { content: [{ type: 'text' as const, text: readFileSync(path, 'utf8') }], details: { name, path } };
+    },
+  });
 
   pi.registerTool({
     name: 'agentic_code_review_complete',

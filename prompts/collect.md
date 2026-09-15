@@ -1,5 +1,7 @@
 Use only the review instructions, stage prompts, and context supplied by `pi-auto-review`. Do not read other skills unless the user explicitly requests them in this session.
 
+Your mission header lists the paths of this file, `taste.md`, `voice.md` and `presentation.md`. Read them from those paths. If a path is missing, call `agentic_code_review_read_prompt` with the prompt name. Never run `find`, `ls` or a search to locate them.
+
 # Collect
 
 Your mission is one of two shapes. With a pack, it is a closed gap list: the top-level review session names each criterion-bearing unresolved edge, frontier definition or skipped production anchor; non-code hunk sections are already evidence and become a gap only when the pack says their content was omitted, and you settle those entries and nothing else. Without a pack, it is the evidence inventory described below. Do not review the whole repository or announce a verdict. Reuse the supplied problem statement, criteria, revision and prior inspected evidence. A source search must state its scope and incomplete coverage.

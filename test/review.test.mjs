@@ -145,6 +145,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_append_finding',
     'agentic_code_review_complete',
     'agentic_code_review_read_learning',
+    'agentic_code_review_read_prompt',
     'agentic_code_review_save_learning',
   ]);
 });
@@ -181,6 +182,7 @@ test('tool preflights the current model at medium and starts one visible Pi pane
   const toolList = start.args[start.args.indexOf('--tools') + 1];
   assert.match(toolList, /spawn_swarm_agents/);
   assert.match(toolList, /get_agent_status/);
+  assert.match(toolList, /agentic_code_review_read_prompt/);
   assert.doesNotMatch(toolList, /agentic_code_review_wave|spawn_agent,|report_and_exit|task_create|task_list|read-critical|read-analyze|agentic_code_review,/);
 
   const prompt = call(harness, 'herdr', ['agent', 'prompt']);
@@ -375,6 +377,14 @@ test('prepared artifacts are private and completion wakes the invoking session e
   assert.deepEqual(review.commentDrafts, []);
   assert.equal(review.preflight.thinking, 'medium');
   assert.equal(review.prompts.session, fileURLToPath(new URL('../prompts/session-launch.md', import.meta.url)));
+  assert.equal(review.prompts.workflow, fileURLToPath(new URL('../prompts/workflow.md', import.meta.url)));
+  assert.equal(paths.prompts, join(harness.storage, sessionId, `${runId}.prompts`));
+  assert.equal(statSync(paths.prompts).mode & 0o777, 0o700);
+  for (const [key, file] of [['reviewZone', 'review-zone'], ['collect', 'collect'], ['taste', 'taste'], ['voice', 'voice'], ['prComments', 'pr-comments'], ['presentation', 'presentation']]) {
+    assert.equal(review.prompts[key], join(paths.prompts, `${file}.md`));
+    assert.equal(statSync(review.prompts[key]).mode & 0o777, 0o600);
+    assert.equal(readFileSync(review.prompts[key], 'utf8'), readFileSync(fileURLToPath(new URL(`../prompts/${file}.md`, import.meta.url)), 'utf8'));
+  }
   assert.equal(review.collection, null);
   assert.equal(review.learning, null);
   assert.equal(review.timing, null);
@@ -491,6 +501,22 @@ test('parallel invocations stay isolated and two failed pane starts recover thro
   assert.equal(harness.execCalls.filter(item => item.command === 'herdr' && item.args[0] === 'pane' && item.args[1] === 'close').length, 2);
 });
 
+test('lanes can read any lane prompt by name without a path', async t => {
+  const harness = createReviewFixture(t);
+  const readPrompt = (name, signal) => harness.tools.get('agentic_code_review_read_prompt').execute('prompt-1', { name }, signal, undefined, harness.ctx);
+
+  const taste = await readPrompt('taste');
+  assert.equal(taste.content[0].text, readFileSync(fileURLToPath(new URL('../prompts/taste.md', import.meta.url)), 'utf8'));
+  assert.equal(taste.details.path, fileURLToPath(new URL('../prompts/taste.md', import.meta.url)));
+  for (const name of ['review-zone', 'collect', 'voice', 'pr-comments', 'presentation']) {
+    assert.match((await readPrompt(name)).content[0].text, /\S/);
+  }
+  await assert.rejects(readPrompt('workflow'), /Unknown review prompt/);
+  await assert.rejects(readPrompt('../package.json'), /Unknown review prompt/);
+  await assert.rejects(readPrompt('taste', AbortSignal.abort()), /abort/i);
+  assert.equal(harness.execCalls.length, 0);
+});
+
 test('workflow encodes one extended-teams batch and only the two low review tiers', () => {
   const workflow = readFileSync(fileURLToPath(new URL('../prompts/workflow.md', import.meta.url)), 'utf8');
   const zone = readFileSync(fileURLToPath(new URL('../prompts/review-zone.md', import.meta.url)), 'utf8');
@@ -502,6 +528,12 @@ test('workflow encodes one extended-teams batch and only the two low review tier
   assert.match(workflow, /at most two `read-review` lanes plus at most one `read-collect`/);
   assert.match(workflow, /run `read-review` and `read-collect` at `medium`/);
   assert.match(workflow, /end the turn; the grouped report resumes this session/);
+  assert.match(workflow, /Every lane prompt opens with a fixed header copied from the review JSON/);
+  assert.match(workflow, /`prompts\.taste`, `prompts\.voice`/);
+  assert.match(workflow, /call `agentic_code_review_read_prompt` with its name; never search the filesystem/);
+  assert.doesNotMatch(workflow, /Every prompt contains only/);
+  assert.match(zone, /If a path is missing, call `agentic_code_review_read_prompt`/);
+  assert.match(readFileSync(fileURLToPath(new URL('../prompts/collect.md', import.meta.url)), 'utf8'), /If a path is missing, call `agentic_code_review_read_prompt`/);
   assert.match(workflow, /The top-level review session takes those items and completes them directly/);
   assert.doesNotMatch(workflow, /agentic_code_review_wave|timeout_seconds|four minutes/);
   assert.match(workflow, /Timing is measurement for later optimization, never a work limit/);
