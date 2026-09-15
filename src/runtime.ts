@@ -291,6 +291,8 @@ function parsePane(stdout: string): string {
   return requireString(pane, 'new Herdr pane ID');
 }
 
+export const missionPrompt = (missionPath: string) => `Read the complete auto-review mission at ${missionPath} and execute it now.`;
+
 const REVIEW_TOOLS = [
   'read', 'bash', 'edit', 'write',
   'agentic_code_review_append_finding', 'agentic_code_review_read_learning', 'agentic_code_review_save_learning', 'agentic_code_review_complete',
@@ -327,7 +329,7 @@ export async function launchReviewPane(
         '--tools', REVIEW_TOOLS,
       ], 310_000);
       started = true;
-      const prompt = `Read the complete auto-review mission at ${input.missionPath} and execute it now.`;
+      const prompt = missionPrompt(input.missionPath);
       let prompted = await capture(pi, 'herdr', ['agent', 'prompt', name, prompt]);
       if (prompted.code !== 0) prompted = await capture(pi, 'herdr', ['agent', 'prompt', name, prompt]);
       if (prompted.code !== 0) throw new Error(prompted.stderr || 'Review session did not accept its mission.');
@@ -349,7 +351,7 @@ export async function runHeadlessReview(
     '--model', input.preflight.model, '--thinking', input.preflight.thinking,
     '--no-skills', '--no-prompt-templates', '--no-context-files',
     '--tools', REVIEW_TOOLS,
-    `Read the complete auto-review mission at ${input.missionPath} and execute it now.`,
+    missionPrompt(input.missionPath),
   ];
   let error = '';
   for (let attempt = 0; attempt < 2; attempt += 1) {

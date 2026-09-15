@@ -31,9 +31,11 @@ Run this from the codebase you want reviewed:
 /code-review https://github.com/owner/repo/pull/123
 ```
 
-`/code-review` sends one short review request to the current Pi session. The command does not preflight the target, ask for confirmation, or launch a pane. The current agent decides how to handle the request.
+Both entry points run the same mission. They differ only in where it runs.
 
-Agents can call `agentic_code_review` with plain-text context when they need the automatic review workflow. That tool preflights the target, exact range, active model and `medium` thinking, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one parallel review wave, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane.
+`/code-review` preflights the target, exact range, active model and `medium` thinking, writes the run artifacts, then runs the review in the current Pi session. The command sets this session to the preflighted model at `medium`, sends the mission as a user message and does not open a pane or ask for confirmation. When the review completes, the same session receives the handoff and presents the report.
+
+Agents call `agentic_code_review` with plain-text context. That tool runs the same preflight, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one parallel review wave, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane.
 
 For a pull request URL the review session first pulls the PR itself through the provider's CLI (`gh` for github.com, `gs` for Meteorite), read-only: the description becomes a requirement source, existing review threads and bot comments become evidence to reconcile rather than repeat, and CI becomes a process condition. The [PR context contract](prompts/pr-context.md) has the commands and record shapes.
 

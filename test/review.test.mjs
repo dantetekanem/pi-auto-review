@@ -47,9 +47,13 @@ function createReviewFixture(t, sessionId = 'session-1') {
   const notices = [];
   const confirmations = [];
   const execCalls = [];
+  const modelChanges = [];
+  const thinkingChanges = [];
   const eventHandlers = new Map();
   const behavior = {
     confirm: true,
+    thinkingLevel: 'max',
+    setModel: true,
     execute(command, args) {
       if (command === 'gs') return { code: 0, stdout: JSON.stringify({ number: 42, title: 'Keep eligibility outside Verdict', baseSha: sha('a'), headSha: sha('b'), baseRef: 'main', headRef: 'feature', htmlUrl: 'https://meteorite.shopify.io/repos/shop/world/pulls/42' }), stderr: '' };
       if (command === 'gh') return { code: 0, stdout: JSON.stringify({ number: 7, title: 'GitHub change', baseRefOid: sha('c'), headRefOid: sha('d'), url: 'https://github.com/owner/repo/pull/7' }), stderr: '' };
@@ -71,12 +75,25 @@ function createReviewFixture(t, sessionId = 'session-1') {
       execCalls.push({ command, args, options });
       return behavior.execute(command, args, options);
     },
+    setModel: async model => {
+      modelChanges.push(model);
+      if (behavior.setModel) ctx.model = model;
+      return behavior.setModel;
+    },
+    getThinkingLevel: () => behavior.thinkingLevel,
+    setThinkingLevel: level => {
+      thinkingChanges.push(level);
+      behavior.thinkingLevel = level;
+    },
   };
   const ctx = {
     cwd,
     hasUI: true,
     model: { provider: 'openai', id: 'gpt-test', reasoning: true },
     thinkingLevel: 'max',
+    modelRegistry: {
+      find: (provider, id) => [ctx.model, ...(ctx.scopedModels ?? []).map(item => item.model)].find(model => model.provider === provider && model.id === id),
+    },
     sessionManager: {
       getSessionId: () => sessionId,
       getEntries: () => messages.map(item => ({ type: 'message', message: { role: 'custom', ...item.message } })),
@@ -101,7 +118,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
   });
 
   return {
-    dir, storage, cwd, pi, commands, tools, messages, userMessages, notices, confirmations, execCalls, eventHandlers, behavior, ctx,
+    dir, storage, cwd, pi, commands, tools, messages, userMessages, notices, confirmations, execCalls, modelChanges, thinkingChanges, eventHandlers, behavior, ctx,
     command: context => commands.get('code-review').handler(context, ctx),
     tool: (context = '', signal) => tools.get('agentic_code_review').execute('call-1', { context }, signal, undefined, ctx),
     complete: input => tools.get('agentic_code_review_complete').execute('complete-1', input, undefined, undefined, ctx),
@@ -175,7 +192,10 @@ test('tool preflights the current model at medium and starts one visible Pi pane
   assert.equal(harness.messages.length, 0);
   assert.equal(readJson(result.details.paths.review).preflight.thinking, 'medium');
   assert.equal(readJson(result.details.paths.review).reviewSession.name, result.details.reviewSession.name);
+  assert.equal(readJson(result.details.paths.review).reviewSession.mode, 'pane');
   assert.equal(harness.execCalls.some(item => item.command === 'spawn_agent'), false);
+  assert.deepEqual(harness.userMessages, []);
+  assert.deepEqual(harness.thinkingChanges, []);
 });
 
 test('preflight reuses the newest matching reviewed checkout before falling back to the invoking cwd', async t => {
@@ -241,21 +261,101 @@ test('provider metadata or commit failures launch from a saved provider patch in
   assert.match(readFileSync(commit.details.paths.patch, 'utf8'), /\+fallback/);
 });
 
-test('slash command sends one direct review request without preflight or launch work', async t => {
+test('slash command preflights, sets this session to medium and runs the mission here without a pane', async t => {
   const harness = createReviewFixture(t);
   await harness.command('https://github.com/owner/repo/pull/7');
 
-  assert.deepEqual(harness.userMessages, [{
-    message: 'Review this code.\n\nhttps://github.com/owner/repo/pull/7',
-    options: undefined,
-  }]);
   assert.equal(harness.confirmations.length, 0);
-  assert.equal(harness.execCalls.length, 0);
-  assert.equal(harness.messages.length, 0);
+  assert.equal(harness.execCalls.filter(item => item.command === 'herdr' || item.command === 'pi').length, 0);
+  assert.ok(call(harness, 'gh', ['pr', 'view']));
+  assert.deepEqual(harness.thinkingChanges, ['medium']);
+  assert.deepEqual(harness.modelChanges, []);
+
+  const receipts = harness.messages.filter(item => item.message.customType === 'agentic-code-review');
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].options.triggerTurn, false);
+  assert.match(receipts[0].message.content, /Target: GitHub change — https:\/\/github\.com\/owner\/repo\/pull\/7/);
+  assert.match(receipts[0].message.content, /Thinking: medium/);
+  assert.match(receipts[0].message.content, /Session: review-[0-9a-f]{8} in this Pi session \(set thinking medium\)/);
+  const { paths, runId, sessionId, reviewSession } = receipts[0].message.details;
+  assert.equal(reviewSession.mode, 'current');
+
+  assert.deepEqual(harness.userMessages, [{
+    message: `Read the complete auto-review mission at ${paths.mission} and execute it now.`,
+    options: { deliverAs: 'followUp' },
+  }]);
+  const review = readJson(paths.review);
+  assert.equal(review.status, 'prepared');
+  assert.equal(review.reviewSession.mode, 'current');
+  assert.equal(review.preflight.model, 'openai/gpt-test');
+  assert.equal(review.preflight.thinking, 'medium');
+  assert.match(readFileSync(paths.mission, 'utf8'), /visible top-level review session/);
+  assert.match(readFileSync(paths.pr, 'utf8'), /GitHub change/);
+
+  writeFileSync(paths.review, JSON.stringify({ ...review, status: 'complete', completedAt: '2026-09-15T00:00:00Z', findings: [], commentDrafts: [] }));
+  const completion = await harness.complete({ sessionId, runId, summary: 'Clean change.' });
+  assert.equal(completion.terminate, true);
+  await settleWatcher();
+  const handoffs = harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete');
+  assert.equal(handoffs.length, 1);
+  assert.equal(handoffs[0].options.triggerTurn, true);
+  assert.equal(handoffs[0].message.details.runId, runId);
+});
+
+test('slash command switches this session to the preflighted medium model and reports a failed switch', async t => {
+  const harness = createReviewFixture(t);
+  harness.ctx.model.reasoning = false;
+  harness.ctx.scopedModels = [{ model: { provider: 'anthropic', id: 'medium-model', reasoning: true } }];
+  await harness.command('');
+
+  assert.deepEqual(harness.modelChanges.map(model => `${model.provider}/${model.id}`), ['anthropic/medium-model']);
+  assert.deepEqual(harness.thinkingChanges, ['medium']);
+  assert.equal(harness.userMessages.length, 1);
+  assert.match(harness.messages[0].message.content, /set model anthropic\/medium-model, thinking medium/);
+
+  const refused = createReviewFixture(t, 'refused-switch');
+  refused.ctx.model.reasoning = false;
+  refused.ctx.scopedModels = [{ model: { provider: 'anthropic', id: 'medium-model', reasoning: true } }];
+  refused.behavior.setModel = false;
+  await refused.command('');
+  assert.equal(refused.notices.length, 1);
+  assert.match(refused.notices[0][0], /could not switch to anthropic\/medium-model/);
+  assert.equal(refused.notices[0][1], 'error');
+  assert.deepEqual(refused.userMessages, []);
+  assert.deepEqual(refused.thinkingChanges, []);
+});
+
+test('slash command failures surface as one notice and send no mission', async t => {
+  const harness = createReviewFixture(t);
+  harness.ctx.sessionManager.getSessionId = () => '../escape';
+  await harness.command('');
+
+  assert.equal(harness.notices.length, 1);
+  assert.match(harness.notices[0][0], /session/i);
+  assert.equal(harness.notices[0][1], 'error');
+  assert.deepEqual(harness.userMessages, []);
+  assert.deepEqual(harness.messages, []);
   assert.equal(exists(dirname(harness.storage)), false);
 
+  harness.ctx.hasUI = false;
+  await assert.rejects(harness.command(''), /session/i);
+});
+
+test('session reload keeps a current-session run on its watcher instead of launching a pane', async t => {
+  const harness = createReviewFixture(t);
   await harness.command('');
-  assert.equal(harness.userMessages[1].message, 'Review the current changes.');
+  const { paths, runId, sessionId } = harness.messages[0].message.details;
+  harness.eventHandlers.get('session_shutdown')();
+  harness.execCalls.length = 0;
+
+  await harness.eventHandlers.get('session_start')({}, harness.ctx);
+  await settleWatcher();
+  assert.equal(harness.execCalls.filter(item => item.command === 'herdr').length, 0);
+  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 0);
+
+  writeFileSync(paths.complete, JSON.stringify({ sessionId, runId, status: 'complete', completedAt: '2026-09-15T00:00:00Z', summary: 'Finished after reload.' }));
+  await settleWatcher();
+  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
 });
 
 test('prepared artifacts are private and completion wakes the invoking session exactly once', async t => {

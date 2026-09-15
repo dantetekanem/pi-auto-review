@@ -24,6 +24,7 @@ import {
   completionFileName,
   formatPreflight,
   launchReviewPane,
+  missionPrompt,
   preflightReview,
   runHeadlessReview,
   type ReviewPreflight,
@@ -31,12 +32,14 @@ import {
 
 const promptPath = (name: string) => fileURLToPath(new URL(`../prompts/${name}.md`, import.meta.url));
 const readPrompt = (name: string) => readFileSync(promptPath(name), 'utf8');
+type ReviewSessionMode = 'pane' | 'current';
 function prepareReview(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   context: string,
   root: string,
   preflight: ReviewPreflight,
+  mode: ReviewSessionMode,
   signal?: AbortSignal,
   preparedRunId?: string,
 ) {
@@ -97,7 +100,7 @@ function prepareReview(
     paths,
     prompts,
     preflight: preflightRecord,
-    reviewSession: { name },
+    reviewSession: { name, mode },
   };
   const mission = launch.replace('{{review}}', () => JSON.stringify(paths.review));
 
@@ -205,7 +208,7 @@ function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>
     processMonitors.delete(runId);
     pi.sendMessage({
       customType: 'agentic-code-review-complete',
-      content: `Review session ${reviewSession.name} finished (${String(marker.status ?? 'unknown')}). Read ${paths.review}, ${paths.bugs} and the relevant records in ${paths.map}, then present the review under the saved presentation and voice prompts. The pane's draft summary was: ${String(marker.summary ?? '').slice(0, 5000)}`,
+      content: `Review session ${reviewSession.name} finished (${String(marker.status ?? 'unknown')}). Read ${paths.review}, ${paths.bugs} and the relevant records in ${paths.map}, then present the review under the saved presentation and voice prompts. The review's draft summary was: ${String(marker.summary ?? '').slice(0, 5000)}`,
       details: { runId, paths, reviewSession, marker },
       display: true,
     }, { triggerTurn: true, deliverAs: 'followUp' });
@@ -251,6 +254,24 @@ function monitorReviewProcess(
     }
     processMonitors.delete(runId);
   })();
+}
+
+async function adoptReviewModel(pi: ExtensionAPI, ctx: ExtensionContext, preflight: ReviewPreflight): Promise<string[]> {
+  const changes: string[] = [];
+  const current = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : '';
+  if (current !== preflight.model) {
+    const slash = preflight.model.indexOf('/');
+    const model = ctx.modelRegistry.find(preflight.model.slice(0, slash), preflight.model.slice(slash + 1));
+    if (!model || !(await pi.setModel(model))) {
+      throw new Error(`This session could not switch to ${preflight.model}. Select it, then run /code-review again.`);
+    }
+    changes.push(`model ${preflight.model}`);
+  }
+  if (pi.getThinkingLevel() !== preflight.thinking) {
+    pi.setThinkingLevel(preflight.thinking);
+    changes.push(`thinking ${preflight.thinking}`);
+  }
+  return changes;
 }
 
 function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
@@ -308,7 +329,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   const launch = async (context: string, ctx: ExtensionContext, signal?: AbortSignal, prepared?: ReviewPreflight, preparedRunId?: string, checkout?: string) => {
     signal?.throwIfAborted();
     const preflight = prepared ?? await preflightReview(pi, ctx, context, root, checkout);
-    const run = prepareReview(pi, ctx, context, root, preflight, signal, preparedRunId);
+    const run = prepareReview(pi, ctx, context, root, preflight, 'pane', signal, preparedRunId);
     const closeWatcher = watchCompletion(pi, run);
     try {
       let reviewSession;
@@ -349,7 +370,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         if (!review.runId || !review.paths?.complete || !review.paths?.mission || !review.reviewSession?.name || !review.preflight || completionDelivered(ctx, review.runId)) continue;
         const run = { details: review, mission: readFileSync(review.paths.mission, 'utf8') } as ReturnType<typeof prepareReview>;
         watchCompletion(pi, run);
-        if (existsSync(review.paths.complete)) continue;
+        if (existsSync(review.paths.complete) || review.reviewSession.mode === 'current') continue;
         const current = await pi.exec('herdr', ['agent', 'get', review.reviewSession.name], { timeout: 10_000 }).catch(() => ({ code: 1, stdout: '', stderr: '' }));
         let reviewSession: { name: string; paneId: string; model: string; thinking: 'medium' };
         if (current.code === 0) {
@@ -366,10 +387,31 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   });
 
   pi.registerCommand('code-review', {
-    description: 'Ask the current Pi session to review code; optional context is plain text.',
-    handler: context => {
-      const reviewContext = context.trim();
-      pi.sendUserMessage(reviewContext ? `Review this code.\n\n${reviewContext}` : 'Review the current changes.');
+    description: 'Preflight the target and run the automatic review in this Pi session; optional context is plain text.',
+    handler: async (context, ctx) => {
+      try {
+        const preflight = await preflightReview(pi, ctx, context, root);
+        const run = prepareReview(pi, ctx, context, root, preflight, 'current', ctx.signal);
+        const closeWatcher = watchCompletion(pi, run);
+        let changes: string[];
+        try {
+          changes = await adoptReviewModel(pi, ctx, preflight);
+        } catch (error) {
+          closeWatcher();
+          throw error;
+        }
+        const { runId, sessionId, paths, reviewSession } = run.details;
+        pi.sendMessage({
+          customType: 'agentic-code-review',
+          content: `${formatPreflight(preflight, paths.review)}\nSession: ${reviewSession.name} in this Pi session${changes.length ? ` (set ${changes.join(', ')})` : ''}\n\nThis Pi session runs the review and receives its completion handoff from ${paths.complete}.`,
+          details: { runId, sessionId, paths, preflight: run.details.preflight, reviewSession },
+          display: true,
+        }, { triggerTurn: false });
+        pi.sendUserMessage(missionPrompt(paths.mission), { deliverAs: 'followUp' });
+      } catch (error) {
+        if (!ctx.hasUI) throw error;
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error');
+      }
     },
   });
 
