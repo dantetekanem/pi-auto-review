@@ -14,7 +14,6 @@ import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-// Reuse an installed Pi loader and its peers. This runner never installs packages.
 const piRoot = process.env.PI_PACKAGE_ROOT
   || resolve(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')), '../..');
 const require = createRequire(join(piRoot, 'package.json'));
@@ -26,337 +25,407 @@ const alias = Object.fromEntries(
 );
 const jiti = createJiti(import.meta.url, { moduleCache: false, alias });
 const { registerReview } = await jiti.import('../src/index.ts');
-const { createEventBus } = await import(join(piRoot, 'dist/core/event-bus.js'));
-const requestEvent = 'pi-extended-teams:orchestration-request';
-const responseEvent = 'pi-extended-teams:orchestration-response';
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
+const sha = char => char.repeat(40);
 
 function createReviewFixture(t, sessionId = 'session-1') {
   const dir = mkdtempSync(join(tmpdir(), 'agentic-review-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-
   const storage = join(dir, 'agent', 'auto-review');
   const cwd = join(dir, 'project');
   mkdirSync(cwd);
   writeFileSync(join(cwd, 'untouched.txt'), 'existing work');
 
+  const previousHerdr = process.env.HERDR_ENV;
+  const previousPane = process.env.HERDR_PANE_ID;
+  process.env.HERDR_ENV = '1';
+  process.env.HERDR_PANE_ID = 'w1:p1';
+
   const commands = new Map();
   const tools = new Map();
   const messages = [];
-  const userMessages = [];
   const notices = [];
-  const requests = [];
-  const bus = createEventBus();
-  const listeners = new Set();
-  const active = ['spawn_agent'];
-  const success = request => bus.emit(responseEvent, {
-    requestId: request.requestId,
-    type: request.type,
-    ok: true,
-    details: {
-      name: request.params.name,
-      role: 'write',
-      queued: false,
-    },
-  });
-  const responder = { current: success };
-  const events = {
-    on(channel, listener) {
-      const off = bus.on(channel, listener);
-      if (channel === responseEvent) listeners.add(listener);
-
-      return () => {
-        listeners.delete(listener);
-        off();
-      };
-    },
-    emit(channel, data) {
-      if (channel === requestEvent) requests.push(data);
-      bus.emit(channel, data);
+  const confirmations = [];
+  const execCalls = [];
+  const eventHandlers = new Map();
+  const behavior = {
+    confirm: true,
+    execute(command, args) {
+      if (command === 'gs') return { code: 0, stdout: JSON.stringify({ number: 42, title: 'Keep eligibility outside Verdict', baseSha: sha('a'), headSha: sha('b'), baseRef: 'main', headRef: 'feature', htmlUrl: 'https://meteorite.shopify.io/repos/shop/world/pulls/42' }), stderr: '' };
+      if (command === 'gh') return { code: 0, stdout: JSON.stringify({ number: 7, title: 'GitHub change', baseRefOid: sha('c'), headRefOid: sha('d'), url: 'https://github.com/owner/repo/pull/7' }), stderr: '' };
+      if (command === 'git') return { code: 0, stdout: `${sha('e')}\n`, stderr: '' };
+      if (command === 'herdr' && args[0] === 'pane' && args[1] === 'layout') return { code: 0, stdout: JSON.stringify({ result: { layout: { panes: [{ pane_id: 'w1:p1', rect: { width: 200, height: 60 } }] } } }), stderr: '' };
+      if (command === 'herdr' && args[0] === 'pane' && args[1] === 'split') return { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: 'w1:p2' } } }), stderr: '' };
+      return { code: 0, stdout: '{}', stderr: '' };
     },
   };
-  bus.on(requestEvent, request => responder.current?.(request));
 
   const pi = {
-    on: () => {},
+    __disableAutoReviewWatchdog: true,
+    on: (event, handler) => eventHandlers.set(event, handler),
     registerCommand: (name, definition) => commands.set(name, definition),
     registerTool: definition => tools.set(definition.name, definition),
-    getActiveTools: () => active,
-    events,
     sendMessage: (message, options) => messages.push({ message, options }),
-    sendUserMessage: (content, options) => userMessages.push({ content, options }),
+    exec: async (command, args, options) => {
+      execCalls.push({ command, args, options });
+      return behavior.execute(command, args, options);
+    },
   };
   const ctx = {
     cwd,
     hasUI: true,
-    sessionManager: { getSessionId: () => sessionId },
-    ui: { notify: (...args) => notices.push(args) },
+    model: { provider: 'openai', id: 'gpt-test', reasoning: true },
+    thinkingLevel: 'max',
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getEntries: () => messages.map(item => ({ type: 'message', message: { role: 'custom', ...item.message } })),
+    },
+    ui: {
+      notify: (...args) => notices.push(args),
+      confirm: async (...args) => {
+        confirmations.push(args);
+        return behavior.confirm;
+      },
+    },
   };
   registerReview(pi, storage);
 
+  t.after(() => {
+    eventHandlers.get('session_shutdown')?.();
+    rmSync(dir, { recursive: true, force: true });
+    if (previousHerdr === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = previousHerdr;
+    if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = previousPane;
+  });
+
   return {
-    dir,
-    storage,
-    cwd,
-    commands,
-    tools,
-    messages,
-    userMessages,
-    notices,
-    active,
-    ctx,
-    requests,
-    bus,
-    listeners,
-    responder,
-    success,
+    dir, storage, cwd, pi, commands, tools, messages, notices, confirmations, execCalls, eventHandlers, behavior, ctx,
     command: context => commands.get('code-review').handler(context, ctx),
-    tool: (context = '', signal) => tools.get('agentic_code_review')
-      .execute('call-1', { context }, signal, undefined, ctx),
+    tool: (context = '', signal) => tools.get('agentic_code_review').execute('call-1', { context }, signal, undefined, ctx),
+    complete: input => tools.get('agentic_code_review_complete').execute('complete-1', input, undefined, undefined, ctx),
   };
 }
 
-test('installed Pi loader registers the review tools from a different cwd', async t => {
+function call(harness, command, startsWith) {
+  return harness.execCalls.find(item => item.command === command && item.args.slice(0, startsWith.length).every((value, index) => value === startsWith[index]));
+}
+
+async function settleWatcher() {
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 300));
+}
+
+test('installed Pi loader registers the dedicated-session review tools from a different cwd', async t => {
   const harness = createReviewFixture(t);
   const { loadExtensions } = await import(join(piRoot, 'dist/core/extensions/loader.js'));
-
-  const loaded = await loadExtensions(
-    [fileURLToPath(new URL('../src/index.ts', import.meta.url))],
-    harness.cwd,
-  );
+  const loaded = await loadExtensions([fileURLToPath(new URL('../src/index.ts', import.meta.url))], harness.cwd);
 
   assert.deepEqual(loaded.errors, []);
   assert.ok(loaded.extensions[0].commands.has('code-review'));
   assert.deepEqual([...loaded.extensions[0].tools.keys()].sort(), [
     'agentic_code_review',
     'agentic_code_review_append_finding',
+    'agentic_code_review_complete',
     'agentic_code_review_read_learning',
     'agentic_code_review_save_learning',
+    'agentic_code_review_wave',
   ]);
 });
 
-test('both entry points launch one nested-enabled coordinator with raw context and a short receipt', async t => {
+test('tool preflights the current model at medium and starts one visible Pi pane without a delegated coordinator', async t => {
   const harness = createReviewFixture(t);
-  const context = '  https://example.test/pr/1\nFocus on "retries" and $ARGUMENTS.  ';
-
-  await harness.command(context);
+  const context = 'https://meteorite.shopify.io/repos/shop/world/pulls/42';
   const result = await harness.tool(context);
 
-  assert.equal(harness.requests.length, 2);
-  for (const request of harness.requests) {
-    assert.equal(request.type, 'spawn_agent');
-    assert.equal(request.ctx, harness.ctx);
-    assert.equal(request.params.model_slot, 'write-critical');
-    assert.equal(request.params.allow_nested_read_agents, true);
+  assert.ok(result.details.preflight.elapsedMs >= 0);
+  const { elapsedMs: _elapsedMs, ...preflight } = result.details.preflight;
+  assert.deepEqual(preflight, {
+    target: context,
+    provider: 'meteorite',
+    number: 42,
+    title: 'Keep eligibility outside Verdict',
+    base: sha('a'),
+    head: sha('b'),
+    checkout: harness.cwd,
+    model: 'openai/gpt-test',
+    thinking: 'medium',
+  });
+  const split = call(harness, 'herdr', ['pane', 'split']);
+  assert.ok(split);
+  assert.ok(split.args.includes('--no-focus'));
+  assert.equal(split.args[split.args.indexOf('--direction') + 1], 'right');
 
-    const details = request.params.metadata;
-    assert.match(details.runId, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
-    assert.equal(request.requestId, details.runId);
-    assert.equal(request.params.name, `review-${details.runId.slice(0, 8)}`);
-    const review = readJson(details.paths.review);
-    assert.equal(review.coordinator.name, request.params.name);
-    for (const [kind, path] of Object.entries(details.paths)) {
-      const extension = kind === 'map' ? 'jsonl' : 'json';
-      assert.equal(path, join(harness.storage, details.sessionId, `${details.runId}.${kind}.${extension}`));
-    }
-    assert.equal(review.context, context);
-    assert.ok(request.params.prompt.includes(JSON.stringify(details.paths.review)));
-    assert.ok(request.params.prompt.includes('coordinator.md'));
-    assert.ok(request.params.prompt.length < 1500);
-  }
-  assert.equal(harness.messages.length, 1);
-  assert.equal(harness.messages[0].options.triggerTurn, false);
-  assert.equal(harness.userMessages.length, 0);
-  assert.equal(readJson(result.details.paths.review).context, context);
-  assert.ok(result.content[0].text.length < 1500);
-  assert.equal(harness.listeners.size, 0);
+  const start = call(harness, 'herdr', ['agent', 'start']);
+  assert.ok(start);
+  assert.equal(start.args[start.args.indexOf('--kind') + 1], 'pi');
+  assert.equal(start.args[start.args.indexOf('--model') + 1], 'openai/gpt-test');
+  assert.equal(start.args[start.args.indexOf('--thinking') + 1], 'medium');
+  assert.ok(start.args.includes('--no-skills') && start.args.includes('--no-context-files'));
+  const toolList = start.args[start.args.indexOf('--tools') + 1];
+  assert.match(toolList, /agentic_code_review_wave/);
+  assert.doesNotMatch(toolList, /spawn_swarm_agents|spawn_agent,|get_agent_status|task_create|task_list|read-critical|read-analyze|agentic_code_review,/);
+
+  const prompt = call(harness, 'herdr', ['agent', 'prompt']);
+  assert.equal(prompt.args.at(-1), `Read the complete auto-review mission at ${result.details.paths.mission} and execute it now.`);
+  assert.match(readFileSync(result.details.paths.mission, 'utf8'), /visible top-level review session/);
+  assert.match(readFileSync(result.details.paths.mission, 'utf8'), new RegExp(result.details.paths.review.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.content[0].text, /Thinking: medium/);
+  assert.match(result.content[0].text, /Herdr pane w1:p2/);
+  assert.equal(harness.messages.length, 0);
+  assert.equal(readJson(result.details.paths.review).preflight.thinking, 'medium');
+  assert.equal(readJson(result.details.paths.review).reviewSession.name, result.details.reviewSession.name);
+  assert.equal(harness.execCalls.some(item => item.command === 'spawn_agent'), false);
 });
 
-test('prepared artifacts are private, readable, session-scoped and outside the project', async t => {
+test('preflight reuses the newest matching reviewed checkout before falling back to the invoking cwd', async t => {
   const harness = createReviewFixture(t);
+  const priorRoot = join(harness.dir, 'world-root');
+  const history = join(harness.storage, 'old-session');
+  mkdirSync(priorRoot);
+  mkdirSync(history, { recursive: true });
+  writeFileSync(join(history, 'old.review.json'), JSON.stringify({
+    codebases: [{ repository: 'https://gitstream.shopify.io/shop/world.git', root: priorRoot }],
+  }));
 
-  const result = await harness.tool();
+  const result = await harness.tool('https://meteorite.shopify.io/repos/shop/world/pulls/42');
+  assert.equal(result.details.preflight.checkout, priorRoot);
+  const split = call(harness, 'herdr', ['pane', 'split']);
+  assert.equal(split.args[split.args.indexOf('--cwd') + 1], priorRoot);
+});
+
+test('preflight fetches a missing PR head without changing the working tree', async t => {
+  const harness = createReviewFixture(t);
+  let headProbes = 0;
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  harness.behavior.execute = (command, args, options) => {
+    if (command === 'git' && args.includes('cat-file') && args.at(-1) === `${sha('b')}^{commit}`) {
+      headProbes += 1;
+      return headProbes === 1 ? { code: 1, stdout: '', stderr: 'missing' } : { code: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'git' && args.includes('fetch')) return { code: 0, stdout: '', stderr: '' };
+    return fallback(command, args, options);
+  };
+
+  await harness.tool('https://meteorite.shopify.io/repos/shop/world/pulls/42');
+  const fetch = harness.execCalls.find(item => item.command === 'git' && item.args.includes('fetch'));
+  assert.deepEqual(fetch.args.slice(-3), ['--no-tags', 'origin', 'feature']);
+  assert.equal(headProbes, 2);
+  assert.equal(harness.execCalls.some(item => item.command === 'git' && item.args.includes('checkout')), false);
+});
+
+test('provider metadata or commit failures launch from a saved provider patch instead of ending the review', async t => {
+  const metadataFailure = createReviewFixture(t, 'metadata-fallback');
+  const fallback = metadataFailure.behavior.execute.bind(metadataFailure.behavior);
+  metadataFailure.behavior.execute = (command, args, options) => {
+    if (command === 'gs' && args[0] === 'pr' && args[1] === 'view' && args.includes('--json')) return { code: 1, stdout: '', stderr: 'metadata unavailable' };
+    if (command === 'gs' && args[0] === 'pr' && args[1] === 'diff') return { code: 0, stdout: 'diff --git a/a.rb b/a.rb\n+changed\n', stderr: '' };
+    return fallback(command, args, options);
+  };
+  const metadata = await metadataFailure.tool('https://meteorite.shopify.io/repos/shop/world/pulls/42');
+  assert.equal(metadata.details.preflight.base, 'unresolved');
+  assert.match(readFileSync(metadata.details.paths.patch, 'utf8'), /\+changed/);
+  assert.match(readJson(metadata.details.paths.review).prContext.gaps.join('\n'), /metadata unavailable/);
+
+  const commitFailure = createReviewFixture(t, 'commit-fallback');
+  const base = commitFailure.behavior.execute.bind(commitFailure.behavior);
+  commitFailure.behavior.execute = (command, args, options) => {
+    if (command === 'git' && args.includes('cat-file') && args.at(-1) === `${sha('b')}^{commit}`) return { code: 1, stdout: '', stderr: 'missing head' };
+    if (command === 'git' && args.includes('fetch')) return { code: 1, stdout: '', stderr: 'fetch unavailable' };
+    if (command === 'gs' && args[0] === 'pr' && args[1] === 'diff') return { code: 0, stdout: 'diff --git a/b.rb b/b.rb\n+fallback\n', stderr: '' };
+    return base(command, args, options);
+  };
+  const commit = await commitFailure.tool('https://meteorite.shopify.io/repos/shop/world/pulls/42');
+  const review = readJson(commit.details.paths.review);
+  assert.match(review.prContext.gaps.join('\n'), /head commit.*fetch unavailable/);
+  assert.match(readFileSync(commit.details.paths.patch, 'utf8'), /\+fallback/);
+});
+
+test('slash command shows the resolved preflight before confirmation and creates nothing when declined', async t => {
+  const harness = createReviewFixture(t);
+  harness.behavior.confirm = false;
+  await harness.command('https://github.com/owner/repo/pull/7');
+
+  assert.equal(harness.confirmations.length, 1);
+  assert.match(harness.confirmations[0][1], /GitHub change/);
+  assert.match(harness.confirmations[0][1], /Model: openai\/gpt-test/);
+  assert.match(harness.confirmations[0][1], /Thinking: medium/);
+  assert.equal(harness.execCalls.filter(item => item.command === 'herdr').length, 0);
+  assert.equal(exists(dirname(harness.storage)), false);
+
+  harness.behavior.confirm = true;
+  await harness.command('https://github.com/owner/repo/pull/7');
+  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages[0].options.triggerTurn, false);
+  assert.match(harness.messages[0].message.content[0].text, /Session: review-/);
+});
+
+test('prepared artifacts are private and completion wakes the invoking session exactly once', async t => {
+  const harness = createReviewFixture(t);
+  const result = await harness.tool('https://meteorite.shopify.io/repos/shop/world/pulls/42');
   const { paths, runId, sessionId } = result.details;
 
-  assert.equal(sessionId, 'session-1');
-  for (const path of Object.values(paths)) {
+  for (const path of [paths.map, paths.bugs, paths.review, paths.pr, paths.threads, paths.prContext, paths.mission]) {
     assert.equal(dirname(path), join(harness.storage, sessionId));
     assert.equal(statSync(path).mode & 0o777, 0o600);
   }
-
+  assert.match(readFileSync(paths.pr, 'utf8'), /Keep eligibility outside Verdict/);
+  assert.ok(readJson(paths.prContext).checks);
+  assert.equal(exists(paths.complete), false);
   const review = readJson(paths.review);
-  const bugs = readJson(paths.bugs);
-  assert.equal(review.runId, runId);
-  assert.equal(review.cwd, harness.cwd);
   assert.equal(review.status, 'prepared');
-  assert.equal(bugs.status, 'prepared');
-  assert.equal(review.presentationVersion, 1);
-  assert.equal(bugs.presentationVersion, 1);
-  assert.equal(
-    review.prompts.presentation,
-    fileURLToPath(new URL('../prompts/presentation.md', import.meta.url)),
-  );
-  assert.equal(
-    review.prompts.voice,
-    fileURLToPath(new URL('../prompts/voice.md', import.meta.url)),
-  );
-  assert.equal(
-    review.prompts.taste,
-    fileURLToPath(new URL('../prompts/taste.md', import.meta.url)),
-  );
-  assert.equal(review.historyRoot, harness.storage);
-  assert.equal(review.codebasesRoot, join(harness.storage, 'codebases'));
-  for (const path of Object.values(review.prompts)) {
-    assert.ok(readFileSync(path, 'utf8').length > 0);
-  }
-  assert.deepEqual(review.grades, { merge: null, deploy: null });
+  assert.deepEqual(review.commentDrafts, []);
+  assert.equal(review.preflight.thinking, 'medium');
+  assert.equal(review.prompts.session, fileURLToPath(new URL('../prompts/session-launch.md', import.meta.url)));
   assert.equal(review.collection, null);
-  assert.equal(review.collectors, 0);
-  assert.equal(review.pack, null);
-  assert.equal(review.prContext, null);
   assert.equal(review.learning, null);
   assert.equal(review.timing, null);
-  assert.equal(
-    review.prompts.prContext,
-    fileURLToPath(new URL('../prompts/pr-context.md', import.meta.url)),
-  );
-  assert.deepEqual(bugs.bugs, []);
-  assert.deepEqual(bugs.findings, []);
-
-  const record = JSON.parse(readFileSync(paths.map, 'utf8').trim());
-  assert.equal(record.kind, 'run');
-  assert.equal(record.runId, runId);
-  assert.equal(record.repository, null);
-  assert.equal(record.revision, null);
-  assert.deepEqual(record.sources, []);
   assert.deepEqual(readdirSync(harness.cwd), ['untouched.txt']);
-  assert.equal(readFileSync(join(harness.cwd, 'untouched.txt'), 'utf8'), 'existing work');
+
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Too early' }), /complete the review json/i);
+  writeFileSync(paths.review, JSON.stringify({ ...review, status: 'incomplete', completedAt: '2026-09-15T00:00:00Z' }));
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Old state' }), /complete the review json/i);
+  const accepted = { ...review, status: 'complete', completedAt: '2026-09-15T00:00:00Z', findings: [{ id: 'finding-1', state: 'accepted' }], commentDrafts: [] };
+  writeFileSync(paths.review, JSON.stringify(accepted));
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Missing draft' }), /Every accepted finding needs one valid commentDraft/);
+  writeFileSync(paths.review, JSON.stringify({ ...accepted, commentDrafts: [{ findingId: 'finding-1', path: 'app/a.rb', line: 3, kind: 'fix', lens: 'tests_coverage', blocks: false, body: 'Add the missing assertion.\n\n**Review details (for agents)**\n\nThe false path is not asserted.\n\nPi auto-review - Model: test/medium - Rate: B **(nonblocking)**' }] }));
+  const completion = await harness.complete({ sessionId, runId, summary: 'The code is sound. One optional simplification remains.' });
+  assert.equal(completion.terminate, true);
+  assert.equal(statSync(paths.complete).mode & 0o777, 0o600);
+  await settleWatcher();
+  const handoffs = harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete');
+  assert.equal(handoffs.length, 1);
+  assert.equal(handoffs[0].options.triggerTurn, true);
+  assert.equal(handoffs[0].options.deliverAs, 'followUp');
+  assert.match(handoffs[0].message.content, /read .*\.review\.json.*\.bugs\.json/i);
+  const repeat = await harness.complete({ sessionId, runId, summary: 'The code is sound. One optional simplification remains.' });
+  assert.equal(repeat.terminate, true);
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Different' }), /different completion/i);
+  await settleWatcher();
+  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
 });
 
-test('later runs and sessions preserve prior evidence', async t => {
+test('watchdog resumes an early-idle review session and delivers its completion marker', async t => {
   const harness = createReviewFixture(t);
-  const first = (await harness.tool('first')).details;
-  writeFileSync(first.paths.map, '{"kind":"learning","claim":"fixture"}\n');
+  harness.pi.__disableAutoReviewWatchdog = false;
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  let resumed = 0;
+  harness.behavior.execute = (command, args, options) => {
+    if (command === 'herdr' && args[0] === 'agent' && args[1] === 'wait') {
+      return { code: 0, stdout: JSON.stringify({ result: { agent: { agent_status: 'done' } } }), stderr: '' };
+    }
+    if (command === 'herdr' && args[0] === 'agent' && args[1] === 'prompt' && String(args.at(-1)).startsWith('Resume the auto-review mission')) {
+      resumed += 1;
+      const session = join(harness.storage, 'session-1');
+      const reviewName = readdirSync(session).find(name => name.endsWith('.review.json'));
+      const runId = reviewName.replace('.review.json', '');
+      writeFileSync(join(session, `${runId}.complete.json`), JSON.stringify({ sessionId: 'session-1', runId, status: 'complete', completedAt: '2026-09-15T00:00:00Z', summary: 'Recovered review completed.' }));
+      return { code: 0, stdout: '{}', stderr: '' };
+    }
+    return fallback(command, args, options);
+  };
 
-  const second = (await harness.tool('second')).details;
-
-  assert.notEqual(first.runId, second.runId);
-  assert.equal(readJson(first.paths.review).context, 'first');
-  assert.equal(JSON.parse(readFileSync(first.paths.map, 'utf8')).claim, 'fixture');
-  assert.equal(readdirSync(join(harness.storage, 'session-1')).length, 6);
-
-  harness.ctx.sessionManager.getSessionId = () => 'session-2';
-  assert.equal(dirname((await harness.tool()).details.paths.map), join(harness.storage, 'session-2'));
+  await harness.tool();
+  await settleWatcher();
+  assert.equal(resumed, 1);
+  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
 });
 
-test('missing teams tools and invalid or pre-aborted input fail before preparation', async t => {
+test('session reload reattaches a durable completion once without duplicating its handoff', async t => {
   const harness = createReviewFixture(t);
-  harness.active.length = 0;
+  const result = await harness.tool();
+  harness.eventHandlers.get('session_shutdown')();
+  const marker = { sessionId: result.details.sessionId, runId: result.details.runId, status: 'complete', completedAt: '2026-09-15T00:00:00Z', summary: 'Completed while the parent was reloading.' };
+  writeFileSync(result.details.paths.complete, JSON.stringify(marker));
 
-  await assert.rejects(harness.tool(), /pi-extended-teams/);
-  await harness.command('request');
-  assert.equal(harness.notices.at(-1)[1], 'error');
+  await harness.eventHandlers.get('session_start')({}, harness.ctx);
+  await settleWatcher();
+  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
+  await harness.eventHandlers.get('session_start')({}, harness.ctx);
+  await settleWatcher();
+  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
+});
 
-  harness.active.push('spawn_swarm_agents');
+test('preflight selects a medium fallback before handling missing Herdr, aborts and invalid input', async t => {
+  const harness = createReviewFixture(t);
+  harness.ctx.model.reasoning = false;
+  harness.ctx.scopedModels = [{ model: { provider: 'anthropic', id: 'medium-model', reasoning: true } }];
+  const fallback = await harness.tool();
+  assert.equal(fallback.details.preflight.model, 'anthropic/medium-model');
+  assert.equal(fallback.details.preflight.thinking, 'medium');
+
+  harness.ctx.model.reasoning = true;
+  harness.ctx.scopedModels = [];
+  delete process.env.HERDR_ENV;
+  const headless = await harness.tool();
+  assert.equal(headless.details.reviewSession.paneId, 'headless');
+  process.env.HERDR_ENV = '1';
   await assert.rejects(harness.tool('', AbortSignal.abort()), /abort/i);
   await assert.rejects(harness.tool('x'.repeat(8001)), /context/i);
   for (const sessionId of ['../escape', '', '/absolute', 'bad\n']) {
     harness.ctx.sessionManager.getSessionId = () => sessionId;
     await assert.rejects(harness.tool(), /session/i);
   }
-  assert.equal(harness.requests.length, 0);
-  assert.deepEqual(readdirSync(harness.dir), ['project']);
 });
 
-test('correlates concurrent responses and preserves coordinator writes made before acknowledgement', async t => {
+test('parallel invocations stay isolated and two failed pane starts recover through one headless review', async t => {
   const harness = createReviewFixture(t);
-  const pending = [];
-  harness.responder.current = request => pending.push(request);
+  const [first, second] = await Promise.all([harness.tool('first'), harness.tool('second')]);
+  assert.notEqual(first.details.runId, second.details.runId);
+  assert.equal(readJson(first.details.paths.review).context, 'first');
+  assert.equal(readJson(second.details.paths.review).context, 'second');
 
-  const first = harness.tool('first');
-  const second = harness.tool('second');
-  harness.bus.emit(responseEvent, {
-    requestId: 'unrelated',
-    type: 'spawn_agent',
-    ok: false,
-    error: 'wrong run',
-  });
-  for (const request of pending.toReversed()) {
-    const path = request.params.metadata.paths.review;
-    writeFileSync(path, JSON.stringify({
-      ...readJson(path),
-      status: 'running',
-      coordinatorEvidence: 'already started',
-    }));
-    harness.success(request);
-  }
-  const results = await Promise.all([first, second]);
-
-  assert.deepEqual(results.map(result => readJson(result.details.paths.review).context), ['first', 'second']);
-  for (const result of results) {
-    assert.equal(readJson(result.details.paths.review).coordinatorEvidence, 'already started');
-  }
-  assert.equal(harness.listeners.size, 0);
+  let starts = 0;
+  harness.behavior.execute = (command, args) => {
+    if (command === 'git') return { code: 0, stdout: `${sha('e')}\n`, stderr: '' };
+    if (command === 'herdr' && args[0] === 'pane' && args[1] === 'layout') return { code: 0, stdout: JSON.stringify({ result: { layout: { panes: [] } } }), stderr: '' };
+    if (command === 'herdr' && args[0] === 'pane' && args[1] === 'split') return { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } }), stderr: '' };
+    if (command === 'herdr' && args[0] === 'agent' && args[1] === 'start') {
+      starts += 1;
+      return { code: 1, stdout: '', stderr: 'agent did not start' };
+    }
+    return { code: 0, stdout: '{}', stderr: '' };
+  };
+  const recovered = await harness.tool('failure');
+  assert.equal(starts, 2);
+  assert.equal(recovered.details.reviewSession.paneId, 'headless');
+  assert.equal(harness.execCalls.filter(item => item.command === 'pi').length, 1);
+  assert.equal(harness.execCalls.filter(item => item.command === 'herdr' && item.args[0] === 'pane' && item.args[1] === 'close').length, 2);
 });
 
-test('reports queued admission or launch failure without retrying or claiming review completion', async t => {
-  const harness = createReviewFixture(t);
-  harness.responder.current = request => harness.bus.emit(responseEvent, {
-    requestId: request.requestId,
-    type: request.type,
-    ok: true,
-    details: { name: request.params.name, queued: true },
-  });
+test('workflow encodes one medium parallel wave and only the two low review tiers', () => {
+  const workflow = readFileSync(fileURLToPath(new URL('../prompts/workflow.md', import.meta.url)), 'utf8');
+  const zone = readFileSync(fileURLToPath(new URL('../prompts/review-zone.md', import.meta.url)), 'utf8');
+  const runtime = readFileSync(fileURLToPath(new URL('../src/runtime.ts', import.meta.url)), 'utf8');
+  const presentation = readFileSync(fileURLToPath(new URL('../prompts/presentation.md', import.meta.url)), 'utf8');
 
-  const queued = await harness.tool();
+  assert.match(workflow, /call `agentic_code_review_wave` exactly once/);
+  assert.match(workflow, /at most two `read-review` workers plus at most one `read-collect`/);
+  assert.match(workflow, /current preflighted model at `medium`/);
+  assert.match(workflow, /`timeout_seconds: 3600`/);
+  assert.match(workflow, /The top-level review session takes those items and completes them directly/);
+  assert.match(workflow, /Timing is measurement for later optimization, never a work limit/);
+  assert.match(workflow, /If the scan fails, record the reason and continue diff-only/);
+  assert.match(workflow, /ask once with `ask_user`.*resume from the answer, and finish/s);
+  assert.match(workflow, /Build `commentDrafts` with one exact full `pr-comments\.md` body per accepted finding/);
+  assert.doesNotMatch(workflow, /read-critical|read-analyze/);
+  assert.match(workflow, /no second wave/i);
+  assert.match(zone, /never read the whole pack or whole diff/);
+  assert.match(zone, /Stay under twelve direct file reads/);
+  assert.doesNotMatch(runtime, /'spawn_agent'|'get_agent_status'|'task_create'|'task_list'/);
+  assert.match(presentation, /render every accepted bug, question, nit and optional fix in full/);
+  assert.match(presentation, /Do not paraphrase, group, truncate or replace comments with a count/);
+  assert.match(presentation, /exact proposed comment blocks do not count toward that limit/i);
 
-  assert.equal(queued.details.coordinator.queued, true);
-  assert.equal(readJson(queued.details.paths.review).status, 'prepared');
-
-  harness.responder.current = request => harness.bus.emit(responseEvent, {
-    requestId: request.requestId,
-    type: request.type,
-    ok: false,
-    error: 'admission failed',
-  });
-  await assert.rejects(harness.tool(), /admission failed/);
-  assert.equal(harness.requests.length, 2);
-  assert.equal(harness.listeners.size, 0);
+  const operational = [
+    workflow,
+    readFileSync(fileURLToPath(new URL('../prompts/session-launch.md', import.meta.url)), 'utf8'),
+    readFileSync(fileURLToPath(new URL('../prompts/coordinator.md', import.meta.url)), 'utf8'),
+    readFileSync(fileURLToPath(new URL('../prompts/launch.md', import.meta.url)), 'utf8'),
+    readFileSync(fileURLToPath(new URL('../prompts/deep-collect.md', import.meta.url)), 'utf8'),
+    readFileSync(fileURLToPath(new URL('../docs/runtime-v2.md', import.meta.url)), 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(operational, /\b(?:replaced|formerly|no longer|we found)\b|\b(?:b05b|e4c20|9023)[a-z0-9-]*\b|\b(?:35m|19m|7m49)\b/i);
 });
 
-test('unacknowledged and interrupted dispatches release listeners and never resend', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const harness = createReviewFixture(t);
-  harness.responder.current = undefined;
-
-  const timedOut = assert.rejects(harness.tool(), /acknowledg.*do not retry/i);
-  t.mock.timers.tick(30_000);
-  await timedOut;
-
-  const controller = new AbortController();
-  const interrupted = assert.rejects(harness.tool('', controller.signal), /do not retry/i);
-  controller.abort();
-  await interrupted;
-
-  assert.equal(harness.requests.length, 2);
-  assert.equal(harness.listeners.size, 0);
-  harness.success(harness.requests[0]);
-  assert.equal(harness.requests.length, 2);
-});
-
-test('storage failure is reported before requesting a coordinator', async t => {
-  const harness = createReviewFixture(t);
-  mkdirSync(dirname(harness.storage), { recursive: true });
-  writeFileSync(harness.storage, 'occupied');
-
-  await assert.rejects(harness.tool(), /ENOTDIR|EEXIST/);
-  await harness.command('request');
-
-  assert.equal(harness.requests.length, 0);
-  assert.equal(harness.messages.length, 0);
-  assert.equal(harness.notices.at(-1)[1], 'error');
-  assert.equal(readFileSync(harness.storage, 'utf8'), 'occupied');
-
-  harness.ctx.hasUI = false;
-  await assert.rejects(harness.command('request'), /ENOTDIR|EEXIST/);
-});
+function exists(path) {
+  try { statSync(path); return true; } catch { return false; }
+}

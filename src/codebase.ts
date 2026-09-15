@@ -78,7 +78,7 @@ function readReviewedCodebase(reviewPath: string, identity: ReviewIdentity) {
     throw new Error('Review does not match invocation.');
   }
   if (
-    !['complete', 'incomplete'].includes(String(review.status))
+    review.status !== 'complete'
     || typeof review.completedAt !== 'string'
     || !Number.isFinite(Date.parse(review.completedAt))
   ) {
@@ -116,13 +116,35 @@ function existingNotes(path: string): string {
   }
 }
 
-function readStoredTopics(directory: string, identity: string): Map<string, string> {
+function repositoryKey(value: string): string {
+  let key = value.trim();
+  try {
+    key = new URL(key).pathname;
+  } catch {
+    key = key.replace(/^git@[^:]+:/, '').replace(/^[^/]+\.[^/]+\//, '');
+  }
+  return key.replace(/^\/(?:repos\/)?/, '').replace(/\.git$/, '').toLowerCase();
+}
+
+function storedRepository(content: string): string | undefined {
+  const match = content.match(/^<!-- repository: (.+) -->\n/);
+  if (!match) return undefined;
+  try {
+    const value: unknown = JSON.parse(match[1]!);
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readStoredTopics(directory: string, repository: string): Map<string, string> {
   const stored = new Map<string, string>();
   const names = readdirSync(directory).filter(name => name.endsWith('.md'));
+  const wanted = repositoryKey(repository);
 
   for (const name of names) {
     const content = existingNotes(join(directory, name));
-    if (content && !content.startsWith(identity)) {
+    if (content && repositoryKey(storedRepository(content) ?? '') !== wanted) {
       throw new Error('This folder contains notes for a different repository.');
     }
     stored.set(name, content);
@@ -130,13 +152,71 @@ function readStoredTopics(directory: string, identity: string): Map<string, stri
   return stored;
 }
 
+function safeFolder(repository: string, repositoryRoot: string): string {
+  const key = repositoryKey(repository);
+  const slug = key.split('/').slice(-2).join('-').replace(/[^a-z0-9._-]+/g, '-').slice(-48) || 'repository';
+  return `${basename(repositoryRoot)}--${slug}-${sha256(key).slice(0, 8)}`;
+}
+
+function directoryMatches(directory: string, repository: string): boolean {
+  try {
+    return readStoredTopics(directory, repository).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function learningDirectory(codebasesRoot: string, repository: string, repositoryRoot: string, migrate: boolean): string {
+  const stable = join(codebasesRoot, safeFolder(repository, repositoryRoot));
+  if (existsPath(stable)) return stable;
+  const legacy = join(codebasesRoot, basename(repositoryRoot));
+  if (!existsPath(legacy) || !directoryMatches(legacy, repository)) return stable;
+  if (!migrate) return legacy;
+  renameSync(legacy, stable);
+  return stable;
+}
+
+function matchingLearningDirectories(codebasesRoot: string, repository: string, repositoryRoot: string): string[] {
+  if (!existsPath(codebasesRoot)) return [];
+  const preferred = [
+    join(codebasesRoot, safeFolder(repository, repositoryRoot)),
+    join(codebasesRoot, basename(repositoryRoot)),
+  ];
+  const discovered = readdirSync(codebasesRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => join(codebasesRoot, entry.name));
+  return [...new Set([...preferred, ...discovered])]
+    .filter(directory => existsPath(directory) && directoryMatches(directory, repository))
+    .sort((left, right) => statMtime(left) - statMtime(right));
+}
+
+function statMtime(path: string): number {
+  try {
+    return lstatSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function existsPath(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return false;
+    throw error;
+  }
+}
+
 type CurrentBlock = { owner: string; revision: string; hash: string; body: string };
 type TopicFile = { header: string; current?: CurrentBlock; history: string };
 
 function splitTopic(content: string, identity: string, topic: string): TopicFile {
-  const header = `${identity}# ${topic}\n`;
-  if (!content) return { header, history: '' };
-  const rest = content.startsWith(header) ? content.slice(header.length) : content.slice(identity.length).replace(/^# [^\n]*\n/, '');
+  const desiredHeader = `${identity}# ${topic}\n`;
+  if (!content) return { header: desiredHeader, history: '' };
+  const storedIdentityLine = content.match(/^<!-- repository: .+ -->\n/)?.[0] ?? identity;
+  const header = `${storedIdentityLine}# ${topic}\n`;
+  const rest = content.startsWith(header) ? content.slice(header.length) : content.slice(storedIdentityLine.length).replace(/^# [^\n]*\n/, '');
   const open = rest.match(CURRENT_OPEN);
   if (open) {
     const end = rest.indexOf(CURRENT_CLOSE, open[0].length);
@@ -238,12 +318,12 @@ export function registerCodebaseLearning(pi: ExtensionAPI, root: string): void {
       const reviewPath = join(root, sessionId, `${runId}.review.json`);
       const codebase = readReviewedCodebase(reviewPath, { sessionId, runId, repository });
       const repositoryRoot = realpathSync(codebase.root);
-      const folder = basename(repositoryRoot);
-      if (!folder || !lstatSync(repositoryRoot).isDirectory()) {
+      if (!basename(repositoryRoot) || !lstatSync(repositoryRoot).isDirectory()) {
         throw new Error('Invalid codebase root.');
       }
 
       const codebasesRoot = join(root, 'codebases');
+      const folder = safeFolder(repository, repositoryRoot);
       const directory = join(codebasesRoot, folder);
       const withinRepository = relative(repositoryRoot, join(realpathSync(root), 'codebases', folder));
       if (
@@ -260,6 +340,8 @@ export function registerCodebaseLearning(pi: ExtensionAPI, root: string): void {
         if (!lstatSync(codebasesRoot).isDirectory()) {
           throw new Error('Codebase storage must be a directory, not a link.');
         }
+        const legacy = join(codebasesRoot, basename(repositoryRoot));
+        if (!existsPath(directory) && existsPath(legacy) && directoryMatches(legacy, repository)) renameSync(legacy, directory);
         mkdirSync(directory, { recursive: true, mode: 0o700 });
         if (!lstatSync(directory).isDirectory()) {
           throw new Error('Codebase storage must be a directory, not a link.');
@@ -279,7 +361,7 @@ export function registerCodebaseLearning(pi: ExtensionAPI, root: string): void {
         try {
           writeFileSync(fd, `${sessionId}/${runId}\n`);
           const identity = `<!-- repository: ${JSON.stringify(repository)} -->\n`;
-          const stored = readStoredTopics(directory, identity);
+          const stored = readStoredTopics(directory, repository);
           const marker = `<!-- review: ${sessionId}/${runId} `;
           const owner = `${sessionId}/${runId}`;
           const updates = notes.map(note => {
@@ -356,47 +438,56 @@ ${note.delta}
       if (!isText(checkout, 4000) || !isAbsolute(checkout) || !isText(repository, 500)) {
         throw new Error('Reading learning needs an absolute checkout root and a repository identity.');
       }
-      const folder = basename(realpathSync(checkout));
-      const directory = join(root, 'codebases', folder);
+      const repositoryRoot = realpathSync(checkout);
+      const codebasesRoot = join(root, 'codebases');
+      const directory = join(codebasesRoot, safeFolder(repository, repositoryRoot));
       const identity = `<!-- repository: ${JSON.stringify(repository)} -->\n`;
-      let stored: Map<string, string>;
-      try {
-        stored = readStoredTopics(directory, identity);
-      } catch (error) {
-        if (hasCode(error, 'ENOENT')) stored = new Map();
-        else if (error instanceof Error && /different repository/.test(error.message)) {
-          return {
-            content: [{ type: 'text' as const, text: `No codebase notes for ${repository}: ${directory} holds notes for another repository.` }],
-            details: { directory, topics: [] },
-          };
-        } else throw error;
+      const directories = matchingLearningDirectories(codebasesRoot, repository, repositoryRoot);
+      const combined = new Map<string, {
+        topic: string;
+        path: string;
+        current: CurrentBlock | null;
+        currentMtime: number;
+        history: Array<{ run: string; completedAt: string; revision: string }>;
+        historyPaths: string[];
+      }>();
+      for (const sourceDirectory of directories) {
+        for (const [name, content] of readStoredTopics(sourceDirectory, repository)) {
+          if (!content) continue;
+          const topic = name.replace(/\.md$/, '');
+          const path = join(sourceDirectory, name);
+          const file = splitTopic(content, identity, topic);
+          const item = combined.get(topic) ?? { topic, path, current: null, currentMtime: 0, history: [], historyPaths: [] };
+          item.history.push(...historyEntries(file.history));
+          item.historyPaths.push(path);
+          const mtime = statMtime(path);
+          if (file.current && mtime >= item.currentMtime) {
+            item.current = file.current;
+            item.currentMtime = mtime;
+            item.path = path;
+          }
+          combined.set(topic, item);
+        }
       }
 
-      const topics = [...stored.entries()]
-        .filter(([, content]) => content)
-        .map(([name, content]) => {
-          const topic = name.replace(/\.md$/, '');
-          const file = splitTopic(content, identity, topic);
-          const runs = historyEntries(file.history);
-          return {
-            topic,
-            path: join(directory, name),
-            current: file.current ? { owner: file.current.owner, revision: file.current.revision, body: file.current.body } : null,
-            runs: runs.length,
-            latestRun: runs.at(-1) ?? null,
-          };
-        })
-        .sort((left, right) => left.topic.localeCompare(right.topic));
+      const topics = [...combined.values()].map(item => ({
+        topic: item.topic,
+        path: item.path,
+        current: item.current ? { owner: item.current.owner, revision: item.current.revision, body: item.current.body } : null,
+        runs: item.history.length,
+        latestRun: item.history.sort((left, right) => Date.parse(left.completedAt) - Date.parse(right.completedAt)).at(-1) ?? null,
+        historyPaths: item.historyPaths,
+      })).sort((left, right) => left.topic.localeCompare(right.topic));
 
       const text = topics.length
         ? topics.map(item => item.current
-          ? `## ${item.topic} (current from ${item.current.owner} at ${item.current.revision}; ${item.runs} runs in history)\n\n${item.current.body}\n`
-          : `## ${item.topic} (no current block yet; ${item.runs} runs in history at ${item.path})\n`).join('\n')
+          ? `## ${item.topic} (current from ${item.current.owner} at ${item.current.revision}; ${item.runs} runs in history${item.historyPaths.length > 1 ? ` across ${item.historyPaths.length} files` : ''})\n\n${item.current.body}\n`
+          : `## ${item.topic} (no current block yet; ${item.runs} runs in history across ${item.historyPaths.join(', ')})\n`).join('\n')
         : `No codebase notes for ${repository} under ${directory}.`;
 
       return {
         content: [{ type: 'text' as const, text }],
-        details: { directory, topics: topics.map(({ topic, path, runs, latestRun, current }) => ({ topic, path, runs, latestRun, current: current ? { owner: current.owner, revision: current.revision, bytes: Buffer.byteLength(current.body) } : null })) },
+        details: { directory, sourceDirectories: directories, topics: topics.map(({ topic, path, runs, latestRun, historyPaths, current }) => ({ topic, path, historyPaths, runs, latestRun, current: current ? { owner: current.owner, revision: current.revision, bytes: Buffer.byteLength(current.body) } : null })) },
       };
     },
   });

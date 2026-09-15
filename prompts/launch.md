@@ -1,3 +1,3 @@
-Use only the review instructions, stage prompts, and context supplied by `pi-auto-review`. Do not read other skills unless the user explicitly requests them in this session.
+# Review launch
 
-Read {{coordinator}} completely. Your prepared run context is {{review}}. Follow those instructions for this one review and report through `report_and_exit`. Do not launch another coordinator.
+Read `session-launch.md` and the prepared review JSON. Verify the preflighted model, thinking level, target and revision. Execute the review in the dedicated visible Pi session and complete the file-based handoff.

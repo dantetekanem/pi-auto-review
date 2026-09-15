@@ -7,7 +7,7 @@ Use this file to decide what to look at and what to do with what you notice. `vo
 ## From lead to finding
 
 1. Notice. Any pattern below is a lead. So is anything that makes you ask "why is it done this way?"
-2. Follow it. Read the callers, the off path, the test that should fail, the object that should own the rule. Spend a few minutes, not the whole budget. Stop when it settles or the budget is spent.
+2. Follow it. Read the callers, the off path, the test that should fail, the object that should own the rule. Follow the shortest evidence path. Stop when the lead settles; do not turn it into an open-ended search.
 3. Settle it into one of four outcomes:
    - It hides a defect: submit a `bug`, set `lens` to the lens that led you there, and let `humanReadable` open with the observation, the way a person would ("Is `old_price` the right name here? A first-time price shouldn't have one, and line 40 reads it as if it did.").
    - The author can answer and the answer changes the assessment: submit a `question` with `lens`. `humanReadable` is the question as you would ask it. `impact` says what changes with the answer. `suggestedFix` says what would settle it (a confirmation, a test, a trace). Rate the risk if the answer is the bad one; C is typical.

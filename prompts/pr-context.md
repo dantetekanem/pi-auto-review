@@ -2,7 +2,7 @@ Use only the review instructions, stage prompts, and context supplied by `pi-aut
 
 # Pull request context at intake
 
-When the review target is a pull request URL, the PR's own state is evidence, and it is pulled before any agent launches. The URL decides the tool: a `github.com` URL uses `gh`; a Meteorite or Gitstream URL uses `gs`. Run the commands from the reviewed checkout. Reading only: never post, comment, react, resolve a thread, re-run a check, or wait on CI. If the tool fails or the URL matches neither provider, record the exact failure as an intake gap and continue with the user's context and the local diff; do not guess what the PR says.
+When the review target is a pull request URL, the PR's own state is evidence. The extension preflight pulls it before the review session starts and writes the paths under `prContext.files`; read those files and do not fetch again. The commands below are fallback only for an item named in `prContext.gaps`. The URL decides the tool: a `github.com` URL uses `gh`; a Meteorite or Gitstream URL uses `gs`. Run the commands from the reviewed checkout. Reading only: never post, comment, react, resolve a thread, re-run a check, or wait on CI. If the tool fails or the URL matches neither provider, record the exact failure as an intake gap and continue with the user's context and the local diff; do not guess what the PR says.
 
 ## 1. Description, range and linked issues
 
@@ -11,7 +11,7 @@ When the review target is a pull request URL, the PR's own state is evidence, an
 
 Save the body verbatim to `pr.md` in the run directory and record a `requirement` map record pointing at it: title, the stated problem, the testing notes, linked issues (`closingIssuesReferences`, issue links in the body, the Meteorite stack parent), labels and draft state. The body is a requirement source alongside the user's context; when they disagree, say so in the requirement record instead of picking one silently.
 
-Use the PR's `baseSha` and `headSha` (`baseRefOid`/`headRefOid` on GitHub) as the exact range. Check both exist locally with `git cat-file -e <sha>^{commit}`; if the head is missing, `git fetch <remote> <headRef>` is allowed because it changes nothing in the working tree. Then call `sparsity_index` with `diff: "<baseSha>...<headSha>"`. If `git rev-parse HEAD` differs from the PR head, say which revision the review covers. Never reset or check out anything.
+Use the PR's `baseSha` and `headSha` (`baseRefOid`/`headRefOid` on GitHub) as the exact range. Check both exist locally with `git cat-file -e <sha>^{commit}`; if the head is missing, `git fetch <remote> <headRef>` is allowed because it changes nothing in the working tree. Then call `sparsity_scan` with `diff: "<baseSha>...<headSha>"`. If `git rev-parse HEAD` differs from the PR head, say which revision the review covers. Never reset or check out anything.
 
 ## 2. Review threads and comments
 

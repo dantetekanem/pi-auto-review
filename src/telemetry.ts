@@ -34,7 +34,7 @@ type ToolSpan = {
   name: string;
 };
 
-// One extension instance writes one stream; the coordinator never rewrites it.
+// One extension instance writes one stream; the top-level review session never rewrites it.
 export function registerTelemetry(pi: ExtensionAPI, root: string, now = () => performance.now()): void {
   let binding: ReviewBinding | undefined;
   let activeStep: StepSpan | undefined;

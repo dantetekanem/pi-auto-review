@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const piRoot = process.env.PI_PACKAGE_ROOT
@@ -48,7 +50,9 @@ function createLearningFixture(t) {
     repository: 'owner/repo',
     notes: createNotes('first'),
   };
-  const directory = join(storage, 'codebases', 'actual repo');
+  const suffix = createHash('sha256').update('owner/repo').digest('hex').slice(0, 8);
+  const directory = join(storage, 'codebases', `actual repo--owner-repo-${suffix}`);
+  const legacyDirectory = join(storage, 'codebases', 'actual repo');
   const prepare = (request = input, changes = {}) => {
     const session = join(storage, request.sessionId);
     mkdirSync(session, { recursive: true });
@@ -85,7 +89,7 @@ function createLearningFixture(t) {
     return save;
   };
 
-  return { dir, storage, repo, input, directory, prepare, register };
+  return { dir, storage, repo, input, directory, legacyDirectory, prepare, register };
 }
 
 function readTopicFiles(directory) {
@@ -191,35 +195,76 @@ test('rejects unfinished or mismatched runs, traversal and invalid notes before 
   assert.deepEqual(readdirSync(harness.storage), ['session-1']);
 });
 
-test('keeps unrelated repositories with the same folder name from sharing notes', async t => {
+test('keeps unrelated repositories with the same checkout folder name in collision-safe directories', async t => {
   const harness = createLearningFixture(t);
   const save = await harness.register();
   harness.prepare();
-  harness.input.notes.push({
-    topic: 'testing',
-    content: 'Original repository tests.',
-    sourceIds: ['learning-tests'],
-  });
   await save();
-
   const before = readTopicFiles(harness.directory);
+
   const otherRoot = join(harness.dir, 'other', 'actual repo');
   mkdirSync(otherRoot, { recursive: true });
-  const other = { ...harness.input, repository: 'other/repo' };
+  const other = { ...harness.input, repository: 'other/repo', notes: createNotes('other repository') };
   harness.prepare(other, {
     codebases: [{ repository: other.repository, root: otherRoot, revision: 'def456' }],
   });
+  const result = await save(other);
+  const otherSuffix = createHash('sha256').update('other/repo').digest('hex').slice(0, 8);
+  const otherDirectory = join(harness.storage, 'codebases', `actual repo--other-repo-${otherSuffix}`);
 
-  await assert.rejects(save(other), /different repository/i);
-  assert.deepEqual(readTopicFiles(harness.directory), before);
+  assert.equal(result.details.directory, otherDirectory);
+  assert.notEqual(otherDirectory, harness.directory);
+  assert.deepEqual(readTopicFiles(harness.directory), before, 'the first repository is unchanged');
+  assert.match(readFileSync(join(otherDirectory, 'structure.md'), 'utf8'), /repository: "other\/repo"/);
+  const read = await save.read({ root: otherRoot, repository: 'other/repo' });
+  assert.equal(read.details.directory, otherDirectory);
+  assert.match(read.content[0].text, /structure/);
+});
 
-  // An interrupted save may have published only an optional topic.
-  for (const topic of topics) {
-    rmSync(join(harness.directory, `${topic}.md`));
-  }
-  const partial = readTopicFiles(harness.directory);
-  await assert.rejects(save({ ...other, notes: createNotes('other repository') }), /different repository/i);
-  assert.deepEqual(readTopicFiles(harness.directory), partial);
+test('reuses current learning split across equivalent HTTPS, bare-host, git and owner/repo identities', async t => {
+  const harness = createLearningFixture(t);
+  const save = await harness.register();
+  harness.prepare();
+  await save();
+
+  const aliasDirectory = join(harness.storage, 'codebases', 'legacy-host-spelling');
+  mkdirSync(aliasDirectory);
+  writeFileSync(join(aliasDirectory, 'decisions.md'), `<!-- repository: "github.com/owner/repo" -->
+# decisions
+
+<!-- current: alias/run abc123 ${'0'.repeat(64)} -->
+Reader#eligible? — alias identity decision
+<!-- /current -->
+
+<!-- review: alias/run ${'1'.repeat(64)} -->
+## 2026-01-02T00:00:00.000Z | 10000000-0000-4000-8000-000000000000
+
+Revision: abc123
+Review: /alias
+Map: /alias.map
+Sources: D-1
+
+Alias delta.
+`);
+
+  const read = await save.read({ root: harness.repo, repository: 'git@github.com:owner/repo.git' });
+  assert.equal(read.details.directory, harness.directory, 'canonical owner/repo path stays the write target');
+  assert.equal(read.details.sourceDirectories.length, 2);
+  assert.match(read.content[0].text, /alias identity decision/);
+  assert.match(read.content[0].text, /1 runs in history/);
+  assert.equal(read.details.topics.find(item => item.topic === 'decisions').historyPaths[0], join(aliasDirectory, 'decisions.md'));
+
+  const next = {
+    ...harness.input,
+    sessionId: 'session-git',
+    runId: 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    repository: 'git@github.com:owner/repo.git',
+    notes: createNotes('git identity'),
+  };
+  harness.prepare(next, { codebases: [{ repository: next.repository, root: harness.repo, revision: 'git123' }] });
+  const saved = await save(next);
+  assert.equal(saved.details.directory, harness.directory, 'the next save writes the canonical folder');
+  assert.equal(existsSync(aliasDirectory), true, 'split history is preserved for provenance');
 });
 
 test('replaces the current block per topic, keeps the run history and reads back only the current blocks', async t => {
@@ -227,9 +272,9 @@ test('replaces the current block per topic, keeps the run history and reads back
   const save = await harness.register();
   harness.prepare();
 
-  const legacy = join(harness.directory, 'structure.md');
-  mkdirSync(harness.directory, { recursive: true });
-  writeFileSync(legacy, '<!-- repository: "owner/repo" -->\n# structure\n\n<!-- review: old/run 0000 -->\n## 2025-12-31T00:00:00.000Z | 00000000-0000-4000-8000-000000000000\n\nRevision: old123\nReview: /old\nMap: /old.map\nSources: S-old\n\nLegacy append-only entry.\n');
+  const legacy = join(harness.legacyDirectory, 'structure.md');
+  mkdirSync(harness.legacyDirectory, { recursive: true });
+  writeFileSync(legacy, '<!-- repository: "https://github.com/owner/repo.git" -->\n# structure\n\n<!-- review: old/run 0000 -->\n## 2025-12-31T00:00:00.000Z | 00000000-0000-4000-8000-000000000000\n\nRevision: old123\nReview: /old\nMap: /old.map\nSources: S-old\n\nLegacy append-only entry.\n');
 
   const empty = await save.read();
   assert.match(empty.content[0].text, /no current block yet; 1 runs in history/);
@@ -240,8 +285,9 @@ test('replaces the current block per topic, keeps the run history and reads back
   };
   const saved = await save(first);
   assert.equal(saved.details.current.structure.owner, 'session-1/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
-  let structure = readFileSync(legacy, 'utf8');
-  assert.ok(structure.startsWith('<!-- repository: "owner/repo" -->\n# structure\n\n<!-- current: session-1/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 abc123 '));
+  assert.equal(existsSync(harness.legacyDirectory), false, 'saving migrates matching legacy notes');
+  let structure = readFileSync(join(harness.directory, 'structure.md'), 'utf8');
+  assert.ok(structure.startsWith('<!-- repository: "https://github.com/owner/repo.git" -->\n# structure\n\n<!-- current: session-1/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 abc123 '));
   assert.ok(structure.includes('structure current one\n<!-- /current -->\n'));
   assert.ok(structure.includes('Legacy append-only entry.'), 'the legacy history survives');
   assert.ok(structure.includes('structure delta one'));
@@ -257,7 +303,7 @@ test('replaces the current block per topic, keeps the run history and reads back
   };
   harness.prepare(second, { revision: 'def456', codebases: [{ repository: second.repository, root: harness.repo, revision: 'def456' }] });
   await save(second);
-  structure = readFileSync(legacy, 'utf8');
+  structure = readFileSync(join(harness.directory, 'structure.md'), 'utf8');
   assert.ok(structure.includes('<!-- current: session-2/b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 def456 '));
   assert.ok(!structure.includes('structure current one'), 'the previous current block is replaced');
   assert.ok(structure.includes('structure delta one') && structure.includes('structure delta two'), 'history keeps both runs');
@@ -280,7 +326,7 @@ test('replaces the current block per topic, keeps the run history and reads back
   assert.equal(summary.current.revision, 'def456');
 
   const other = await save.read({ root: harness.repo, repository: 'someone/else' });
-  assert.match(other.content[0].text, /holds notes for another repository/);
+  assert.match(other.content[0].text, /No codebase notes for someone\/else/);
   assert.deepEqual(other.details.topics, []);
 });
 

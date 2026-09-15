@@ -27,7 +27,7 @@ For each proposed inline comment:
 
 Both the opening and the details block follow `voice.md`, which shows the same finding written both ways for each part of this format. There is no title line: the comment opens with the sentence to the author, the way a review comment written by hand does. The finding's `title` stays in the map and the report; it is not posted.
 
-Use this Markdown inline format, with one literal A–F rating:
+Use this Markdown inline format, with one literal A–F rating. The calling agent renders this exact full block for every proposed comment in the initial review presentation before asking what to do with it:
 
 ```markdown
 {Two to four short sentences to the author: what they would see go wrong, and what you would do or ask.}
