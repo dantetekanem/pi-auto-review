@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2 (2026-09-16)
+
+### Changed
+
+- The report is the whiteboard. `presentation.md` now exists so the reader can be pulled aside and explain the system this change ships and defend its decisions, without line-level recall. The report opens with a 30-second version a person could say aloud, then draws the system in words, then answers why this and not that, who can hurt it and what stops them, what carries the state and why that shape, and where it fails and how anyone would know; the read, the fixes, the comments and the record follow. Every whiteboard sentence carries `verified`, `inferred` or `unknown`, and an unknown becomes a question to the author. Scope is stated once: customer-facing work gets the whole whiteboard; a proof of concept, demo, experiment or spike gets the 30-second version, the defects, and a flag when it touches a customer path. The 500-word ceiling stays; comment blocks still do not count.
+- The report is prose, not a form. The order of content is fixed, the shape is not: no mandatory headers or bullets, sections of uneven length, nothing written to occupy a section. `voice.md` gains a Slop section that follows the anti-slop directive (https://github.com/jalaalrd/anti-ai-slop-writing) and its banned list: no template rhythm, no parataxis or uniform sentence length, no rule of three, bullets only for lists, active voice with a named subject, at most one em dash, specifics over adjectives, one sentence for the counterpoint. Runtime words (`criterion`, `bounded`, `material`, `reconcile`, `surface`) join the table of words never shown to a person.
+- The final review JSON carries a `whiteboard` block (`scope`, `scopeSource`, and `{ text, state }` for `system`, `decisions`, `threat`, `data`, `failure`); zone assessments contribute their part, submitting an unknown as a `question`. Choice 4 after the report is "Pull me aside".
+
+### Fixed
+
+- Reloading Pi re-sent the completion handoff of an already delivered review. The delivered-once check looked for a `message` entry with role `custom`, but Pi stores `sendMessage` output as a `custom_message` entry, so the check never matched and every `session_start` re-delivered the marker. The check now reads `custom_message` entries, and the test fixture stores entries in that shape so the reload test fails on the old code.
+
 ## 0.5.1 (2026-09-16)
 
 ### Added

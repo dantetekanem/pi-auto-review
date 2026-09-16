@@ -38,6 +38,26 @@ Measured over 1,967 review comments on 734 PRs. Match the proportions, not just 
 - Praise is short and stands alone: "🔥", "This is great!", "Code looks good!" It does not pad a critical comment.
 - Teaching happens when the mechanism matters: `any_instance` and the preloader, `with_lock` versus a transaction. Two or three sentences of why, then the ask.
 
+## Slop
+
+Follow the anti-slop directive at https://github.com/jalaalrd/anti-ai-slop-writing/blob/main/skills/anti-ai-slop-writing/SKILL.md and its banned list at `references/banned-words.md` in the same folder. Reading them is part of this contract, not another skill. The rules that matter most in a review:
+
+No template rhythm. A report is not a form. Sections have the length their content needs; some are one sentence, one may run four paragraphs, and the same header does not appear in every report. If two consecutive sections read with the same shape (claim, evidence, ask), rewrite one of them.
+
+No parataxis and no uniform sentence length. Short sentence, then another, then another reads like a machine. Connect thoughts with because, so, but, which, or a semicolon, so the syntax shows how the ideas relate. Never three sentences of the same length in a row. No rule of three: when there are two things, say two; when there are five, say five.
+
+Bullets only for lists that are lists (files, finding IDs, commands, conditions). Never for reasoning, and never more than five in a row.
+
+Active voice with a named subject: `usePixelTracking` scrubs `page_url` but passes `signupPage` straight through. Not "the value is passed unscrubbed".
+
+At most one em dash per report and none in a comment. No exclamation marks. Semicolons and colons are fine; contractions are normal.
+
+Specifics over adjectives: the number of queries, the method name, the line, the fixture. Never a figure or a quote the evidence does not hold; say "roughly" or "I couldn't measure".
+
+Pick a side. One sentence for the counterpoint, then commit. `verified`, `inferred` and `unknown` already carry the uncertainty; the prose does not hedge on top of them.
+
+Before returning, run the directive's self-check on the whole text, then read it once as if saying it to the person. Never mention the rules.
+
 ## Words that mark text as machine-written
 
 Replace these on sight. The left column is what review prose keeps producing; the right column is what a person says.
@@ -56,7 +76,8 @@ Replace these on sight. The left column is what review prose keeps producing; th
 | marks X as Y | says X is Y / treats X as Y |
 | the change / the implementation | the name of the thing changed |
 | in order to | to |
-| material, bounded, criterion, unit, zone, lens, origin, provenance, reconciliation | never in author-facing text |
+| material, bounded, criterion, unit, zone, lens, origin, provenance, reconciliation, reconcile, settle, surface (as a noun for code) | never in text a person reads; these are runtime words |
+| delve, leverage, utilize, robust, comprehensive, seamless, crucial, pivotal, underscore, foster, facilitate, "it's worth noting", "not just X but Y", "at its core", "moving forward" | the banned list; use the plain word or cut the sentence |
 
 ## The same finding, both ways
 

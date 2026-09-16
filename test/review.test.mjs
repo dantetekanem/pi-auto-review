@@ -98,7 +98,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
     },
     sessionManager: {
       getSessionId: () => sessionId,
-      getEntries: () => messages.map(item => ({ type: 'message', message: { role: 'custom', ...item.message } })),
+      getEntries: () => messages.map(item => ({ type: 'custom_message', customType: item.message.customType, content: item.message.content, details: item.message.details, display: item.message.display ?? false })),
     },
     ui: {
       notify: (...args) => notices.push(args),

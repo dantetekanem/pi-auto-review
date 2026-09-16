@@ -291,10 +291,9 @@ async function adoptReviewModel(pi: ExtensionAPI, ctx: ExtensionContext, preflig
 }
 
 function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
-  return ctx.sessionManager.getEntries().some(entry => entry.type === 'message'
-    && entry.message.role === 'custom'
-    && entry.message.customType === 'agentic-code-review-complete'
-    && (entry.message.details as { runId?: unknown } | undefined)?.runId === runId);
+  return ctx.sessionManager.getEntries().some(entry => entry.type === 'custom_message'
+    && entry.customType === 'agentic-code-review-complete'
+    && (entry.details as { runId?: unknown } | undefined)?.runId === runId);
 }
 
 export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
