@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (2026-09-16)
+## 0.5.1 (2026-09-16)
 
 ### Added
 
@@ -14,6 +14,6 @@
 
 - A `fix` comment is a proposal, not a nit: it opens with the observation and an intro line, then the proposed code in a fenced block, then what it buys, and says `Not a blocker` out loud when it can wait. Only `nit` opens with `Nit:`. The receipt goes in the details block in one sentence.
 - The author-facing `humanReadable` summary is short and names the gate (what blocks, what is a fast-follow, what proof is wanted); a clean approve is a few words.
-- The workflow reads the pack's `vicinity above`/`vicinity below` blocks and caller context as part of each anchor (pi-agentic-search 0.6.0). A criterion-bearing `file:` section marked `no parser` is a collector gap: the collector reads around the hunks, `rg`s the changed names for callers and tests, and names the sibling definitions by hand. A zone reviewer does the same within its read budget when the collector was not assigned the file.
+- The workflow reads the pack's `vicinity above`/`vicinity below` blocks and caller context as part of each anchor (pi-agentic-search 0.5.2). A criterion-bearing `file:` section marked `no parser` is a collector gap: the collector reads around the hunks, `rg`s the changed names for callers and tests, and names the sibling definitions by hand. A zone reviewer does the same within its read budget when the collector was not assigned the file.
 
 Earlier versions predate this changelog; see the git history.
