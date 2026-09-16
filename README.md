@@ -43,9 +43,9 @@ For a pull request URL the review session first pulls the PR itself through the 
 
 ## One batch and two worker tiers
 
-The visible review session uses its preflighted model and thinking level. It calls `spawn_swarm_agents` from pi-extended-teams once, with `completion_group: { delivery: "all-settled" }`, for at most two `read-review` lanes and one `read-collect` lane. The configured worker tiers run both at `medium`; they do not describe coordinator provenance. `read-collect` gets a closed list of criterion-bearing scan gaps; `read-review` judges a bounded responsibility zone and runs every taste lens. Every lane prompt opens with the run-local paths of its contract, `taste.md`, `voice.md`, `pr-comments.md` and `presentation.md` (prepare copies them to `<run>.prompts/`), plus the run IDs, repository, revision and pack path. A lane whose mission lost a path calls `agentic_code_review_read_prompt` by name instead of searching the filesystem. Lanes report through `report_and_exit`; the grouped report resumes the review session when every lane settles. A lane that ends partial, blocked, failed or stopped leaves its items to the review session. There is no status polling, inbox loop, second batch or stronger tier.
+The visible review session uses its preflighted model and thinking level. It calls `spawn_swarm_agents` from pi-extended-teams once, with `completion_group: { delivery: "all-settled" }`, for at most two `read-review` lanes and one `read-collect` lane. The configured worker tiers run both at `medium`; they do not describe coordinator provenance. `read-collect` gets a closed list of criterion-bearing scan gaps; `read-review` judges a bounded responsibility zone and runs every taste lens. Every lane prompt opens with the run-local paths of its contract, `taste.md`, `craft.md`, `voice.md`, `pr-comments.md` and `presentation.md` (prepare copies them to `<run>.prompts/`), plus the run IDs, repository, revision and pack path. A lane whose mission lost a path calls `agentic_code_review_read_prompt` by name instead of searching the filesystem. Lanes report through `report_and_exit`; the grouped report resumes the review session when every lane settles. A lane that ends partial, blocked, failed or stopped leaves its items to the review session. There is no status polling, inbox loop, second batch or stronger tier.
 
-The review session starts with one `sparsity_scan` call over the exact diff: changed definitions, resolved calls, callers, representative test anchors plus grouped tests, changed hunks for schema/JSON/YAML files, removed definitions with surviving callers, and an explicit recap of gaps. Workers receive exact anchor IDs and pack line ranges. Static candidates are not runtime proof.
+The review session starts with one `sparsity_scan` call over the exact diff: changed definitions with their vicinity (the file lines above and below each definition), resolved calls, callers with three lines around each call site, representative test anchors plus grouped tests, changed hunks for schema/JSON/YAML files and for any file without a parser (with head-file vicinity and a note that callers, tests and siblings must be read by hand), removed definitions with surviving callers, and an explicit recap of gaps. Workers receive exact anchor IDs and pack line ranges. A criterion-bearing `no parser` file goes to the collector, which does the vicinity work manually: reads around the hunks, `rg`s the changed names for callers and tests, and names the sibling definitions. Static candidates are not runtime proof.
 
 ## Taste as the instrument
 
@@ -57,6 +57,18 @@ where one comment in four starts as taste and ends pointing at a defect.
 
 A lead settles into a `bug` (with the `lens` that surfaced it), a `question` for the author,
 a `nit`, or nothing. Taste alone never blocks; what it uncovers can.
+
+## The craft pass
+
+Finding bugs is half the job. The [craft contract](prompts/craft.md) runs after the lenses in every zone and
+turns what the reviewer knows into feedback the author can use: the better shape shown as code with one line on
+what it buys, a receipt on every behavior claim (what was run, read or counted), a question for the proof only
+the author can give, one teaching sentence per non-obvious mechanism, concessions and fast-follows said out loud,
+rare labeled nits, and what is good. It follows the maintainer's own method, in the order that matters: own the
+outcome, problem first, tests as the spec, design, smells and vicinity, ask yourself, inspect, be reasonable,
+write the comment. Measured over the same twelve months, 15% of the maintainer's comments show the change as
+code, 20% teach the mechanism, 7% carry proof and 10% ask for it; the review session calibrates each zone
+against that mix before grading and saves what made the reviewer better to `methods.md`.
 
 ## Reports and reusable knowledge
 

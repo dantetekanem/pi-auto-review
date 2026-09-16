@@ -445,7 +445,7 @@ test('prepared artifacts are private and completion wakes the invoking session e
   assert.equal(review.prompts.workflow, fileURLToPath(new URL('../prompts/workflow.md', import.meta.url)));
   assert.equal(paths.prompts, join(harness.storage, sessionId, `${runId}.prompts`));
   assert.equal(statSync(paths.prompts).mode & 0o777, 0o700);
-  for (const [key, file] of [['reviewZone', 'review-zone'], ['collect', 'collect'], ['taste', 'taste'], ['voice', 'voice'], ['prComments', 'pr-comments'], ['presentation', 'presentation']]) {
+  for (const [key, file] of [['reviewZone', 'review-zone'], ['collect', 'collect'], ['taste', 'taste'], ['craft', 'craft'], ['voice', 'voice'], ['prComments', 'pr-comments'], ['presentation', 'presentation']]) {
     assert.equal(review.prompts[key], join(paths.prompts, `${file}.md`));
     assert.equal(statSync(review.prompts[key]).mode & 0o777, 0o600);
     assert.equal(readFileSync(review.prompts[key], 'utf8'), readFileSync(fileURLToPath(new URL(`../prompts/${file}.md`, import.meta.url)), 'utf8'));
@@ -573,7 +573,7 @@ test('lanes can read any lane prompt by name without a path', async t => {
   const taste = await readPrompt('taste');
   assert.equal(taste.content[0].text, readFileSync(fileURLToPath(new URL('../prompts/taste.md', import.meta.url)), 'utf8'));
   assert.equal(taste.details.path, fileURLToPath(new URL('../prompts/taste.md', import.meta.url)));
-  for (const name of ['review-zone', 'collect', 'voice', 'pr-comments', 'presentation']) {
+  for (const name of ['review-zone', 'collect', 'craft', 'voice', 'pr-comments', 'presentation']) {
     assert.match((await readPrompt(name)).content[0].text, /\S/);
   }
   await assert.rejects(readPrompt('workflow'), /Unknown review prompt/);
@@ -594,7 +594,13 @@ test('workflow encodes one extended-teams batch and only the two low review tier
   assert.match(workflow, /run `read-review` and `read-collect` at `medium`/);
   assert.match(workflow, /end the turn; the grouped report resumes this session/);
   assert.match(workflow, /Every lane prompt opens with a fixed header copied from the review JSON/);
-  assert.match(workflow, /`prompts\.taste`, `prompts\.voice`/);
+  assert.match(workflow, /`prompts\.taste`, `prompts\.craft`, `prompts\.voice`/);
+  assert.match(workflow, /then the `craft\.md` pass/);
+  assert.match(workflow, /`vicinity above`\/`vicinity below`/);
+  assert.match(workflow, /`file:` section is marked `no parser`/);
+  assert.match(zone, /run the supplied `craft\.md` pass/);
+  assert.match(zone, /One `craft` line/);
+  assert.match(readFileSync(fileURLToPath(new URL('../prompts/pr-comments.md', import.meta.url)), 'utf8'), /A `fix` is a proposal, not a nit/);
   assert.match(workflow, /call `agentic_code_review_read_prompt` with its name; never search the filesystem/);
   assert.doesNotMatch(workflow, /Every prompt contains only/);
   assert.match(zone, /If a path is missing, call `agentic_code_review_read_prompt`/);

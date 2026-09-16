@@ -1,13 +1,13 @@
 {
   "name": "pi-auto-review",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Experimental multi-agent code review for Pi, with impact tracing, human-readable reports, and reusable codebase knowledge.",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/dantetekanem/pi-auto-review.git" },
   "keywords": ["pi-package"],
-  "files": ["src", "prompts", "docs", "README.md", "LICENSE"],
+  "files": ["src", "prompts", "docs", "README.md", "CHANGELOG.md", "LICENSE"],
   "pi": { "extensions": ["./src/index.ts"], "prompts": [] },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.85.1",

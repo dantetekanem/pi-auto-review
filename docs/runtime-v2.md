@@ -38,9 +38,9 @@ Call `spawn_swarm_agents` from pi-extended-teams once with:
 
 - `completion_group: { delivery: "all-settled" }`;
 - at most two `read-review` lanes;
-- at most one `read-collect` lane for a closed list of criterion-bearing gaps;
+- at most one `read-collect` lane for a closed list of criterion-bearing gaps, including the manual vicinity (callers, tests, sibling definitions) for `file:` sections the scan marked `no parser`;
 - `model_slot` per lane; the configured tiers run both at `medium`;
-- a fixed header per lane: run-local paths of its contract, `taste.md`, `voice.md`, `pr-comments.md` and `presentation.md` from `review.json.prompts`, the session/run IDs, repository, revision and pack path;
+- a fixed header per lane: run-local paths of its contract, `taste.md`, `craft.md`, `voice.md`, `pr-comments.md` and `presentation.md` from `review.json.prompts`, the session/run IDs, repository, revision and pack path;
 - exact unit IDs, pack section ranges and assigned questions;
 - `defaults.cwd` set to the reviewed checkout.
 
@@ -53,10 +53,11 @@ End the turn after spawning. The grouped report resumes the session with every l
 1. Finish every worker `unfinished` item through the shortest focused source check.
 2. Reconcile each requirement against implementation, tests, connected impact and counterevidence.
 3. Settle every submitted question and dangling definition.
-4. Grade code. CI, stack order, approvals and deployment are process conditions, not rating inputs.
-5. Render the decision-first report and every proposed comment.
-6. Save current/delta codebase learning, including decisions and methods.
-7. Write final artifacts as `complete` and call `agentic_code_review_complete`.
+4. Calibrate the craft pass: every behavior claim has a receipt or becomes a question; every `fix` keeps its code; a zone with production code and no craft output is completed from the pack.
+5. Grade code. CI, stack order, approvals and deployment are process conditions, not rating inputs.
+6. Render the decision-first report and every proposed comment.
+7. Save current/delta codebase learning, including decisions and methods (which receipt settled fastest, which mechanism had to be taught).
+8. Write final artifacts as `complete` and call `agentic_code_review_complete`.
 
 ## Recovery
 

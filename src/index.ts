@@ -33,7 +33,7 @@ import {
 
 const promptPath = (name: string) => fileURLToPath(new URL(`../prompts/${name}.md`, import.meta.url));
 const readPrompt = (name: string) => readFileSync(promptPath(name), 'utf8');
-const LANE_PROMPTS = ['review-zone', 'collect', 'taste', 'voice', 'pr-comments', 'presentation'] as const;
+const LANE_PROMPTS = ['review-zone', 'collect', 'taste', 'craft', 'voice', 'pr-comments', 'presentation'] as const;
 type LanePrompt = typeof LANE_PROMPTS[number];
 type ReviewSessionMode = 'pane' | 'current';
 function prepareReview(
@@ -75,6 +75,7 @@ function prepareReview(
     presentation: lanePrompt('presentation'),
     voice: lanePrompt('voice'),
     taste: lanePrompt('taste'),
+    craft: lanePrompt('craft'),
     prComments: lanePrompt('pr-comments'),
     prContext: promptPath('pr-context'),
     session: promptPath('session-launch'),
@@ -304,7 +305,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   pi.registerTool({
     name: 'agentic_code_review_read_prompt',
     label: 'Read review prompt',
-    description: 'Return one pi-auto-review prompt by name: review-zone (zone reviewer contract), collect (gap collector contract), taste (the lens catalog behind the finding `lens` field), voice (how to write humanReadable text), pr-comments (inline comment body format) or presentation (report contract). Call this when a mission refers to one of these files without a path. Never search the filesystem for them.',
+    description: 'Return one pi-auto-review prompt by name: review-zone (zone reviewer contract), collect (gap collector contract), taste (the lens catalog behind the finding `lens` field), craft (the pass that turns what the reviewer knows into proposals with code, receipts, teaching and concessions), voice (how to write humanReadable text), pr-comments (inline comment body format) or presentation (report contract). Call this when a mission refers to one of these files without a path. Never search the filesystem for them.',
     parameters: Type.Object({
       name: Type.Union(LANE_PROMPTS.map(prompt => Type.Literal(prompt)), { description: 'Prompt name.' }),
     }),
