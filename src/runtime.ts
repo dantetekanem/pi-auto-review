@@ -9,6 +9,8 @@ export type ReviewIntake = {
   gaps: string[];
 };
 
+export type ReviewThinking = NonNullable<ExtensionContext['thinkingLevel']>;
+
 export type ReviewPreflight = {
   target: string;
   provider: 'github' | 'meteorite' | 'local';
@@ -18,7 +20,7 @@ export type ReviewPreflight = {
   head: string;
   checkout: string;
   model: string;
-  thinking: 'medium';
+  thinking: ReviewThinking;
   elapsedMs: number;
   intake?: ReviewIntake;
 };
@@ -76,34 +78,45 @@ async function ensureCommit(pi: ExtensionAPI, checkout: string, commit: string, 
   await checked(pi, 'git', ['-C', checkout, 'cat-file', '-e', `${commit}^{commit}`]);
 }
 
-function supportsMedium(model: { reasoning?: boolean; thinkingLevelMap?: Record<string, unknown> }): boolean {
-  return Boolean(model.reasoning) && model.thinkingLevelMap?.medium !== null;
+type ReviewModel = {
+  provider: string;
+  id: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, unknown>;
+};
+
+function supportsThinking(model: ReviewModel, thinking: ReviewThinking): boolean {
+  if (!model.reasoning || model.thinkingLevelMap?.[thinking] === null) return false;
+  if (thinking === 'xhigh' || thinking === 'max') {
+    return typeof model.thinkingLevelMap?.[thinking] === 'string';
+  }
+  return true;
 }
 
-async function modelFor(ctx: ExtensionContext): Promise<{ spec: string; thinking: 'medium' }> {
-  if (ctx.model && supportsMedium(ctx.model)) return { spec: `${ctx.model.provider}/${ctx.model.id}`, thinking: 'medium' };
-  const scoped = (ctx.scopedModels ?? []).map(item => item.model).filter(supportsMedium);
-  type ReviewModel = { provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: Record<string, unknown> };
+async function modelFor(ctx: ExtensionContext): Promise<{ spec: string; thinking: ReviewThinking }> {
+  const thinking = ctx.thinkingLevel ?? 'medium';
+  if (ctx.model && supportsThinking(ctx.model, thinking)) return { spec: `${ctx.model.provider}/${ctx.model.id}`, thinking };
+  const scoped = (ctx.scopedModels ?? []).map(item => item.model).filter(model => supportsThinking(model, thinking));
   const registry = ctx.modelRegistry as unknown as { getAvailable?: () => ReviewModel[] | Promise<ReviewModel[]>; find?: (provider: string, id: string) => ReviewModel | undefined } | undefined;
-  const available = registry?.getAvailable ? (await registry.getAvailable()).filter(supportsMedium) : [];
+  const available = registry?.getAvailable ? (await registry.getAvailable()).filter(model => supportsThinking(model, thinking)) : [];
   const candidates = [...scoped, ...available].filter((model, index, all) => all.findIndex(item => item.provider === model.provider && item.id === model.id) === index);
   if (!candidates.length && ctx.hasUI && registry?.find) {
-    const spec = await ctx.ui.input('Medium model for auto-review', 'provider/model');
+    const spec = await ctx.ui.input(`${thinking} model for auto-review`, 'provider/model');
     if (spec) {
       const slash = spec.indexOf('/');
       const selected = slash > 0 ? registry.find(spec.slice(0, slash), spec.slice(slash + 1)) : undefined;
-      if (selected && supportsMedium(selected)) candidates.push(selected);
-      else ctx.ui.notify(`${spec} is unavailable or does not support medium. Choose another model to resume the review.`, 'warning');
+      if (selected && supportsThinking(selected, thinking)) candidates.push(selected);
+      else ctx.ui.notify(`${spec} is unavailable or does not support ${thinking}. Choose another model to resume the review.`, 'warning');
     }
   }
-  if (!candidates.length) throw new Error('Auto-review is waiting for a medium-capable model selection; no review failed or was created.');
+  if (!candidates.length) throw new Error(`Auto-review is waiting for a ${thinking}-capable model selection; no review failed or was created.`);
   let model = candidates[0]!;
   if (ctx.hasUI && candidates.length > 1) {
     const specs = candidates.map(item => `${item.provider}/${item.id}`);
-    const selected = await ctx.ui.select('Choose the medium auto-review model', specs);
+    const selected = await ctx.ui.select(`Choose the ${thinking} auto-review model`, specs);
     if (selected) model = candidates[specs.indexOf(selected)] ?? model;
   }
-  return { spec: `${model.provider}/${model.id}`, thinking: 'medium' };
+  return { spec: `${model.provider}/${model.id}`, thinking };
 }
 
 function repositoryKey(value: string): string {
@@ -305,7 +318,7 @@ export async function launchReviewPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   input: { name: string; missionPath: string; preflight: ReviewPreflight },
-): Promise<{ name: string; paneId: string; model: string; thinking: 'medium' }> {
+): Promise<{ name: string; paneId: string; model: string; thinking: ReviewThinking }> {
   if (process.env.HERDR_ENV !== '1' || !process.env.HERDR_PANE_ID) {
     throw new Error('Auto-review needs a Herdr-managed Pi pane. Run it from Herdr; no delegated coordinator was started.');
   }
@@ -346,7 +359,7 @@ export async function launchReviewPane(
 export async function runHeadlessReview(
   pi: ExtensionAPI,
   input: { name: string; missionPath: string; preflight: ReviewPreflight },
-): Promise<{ name: string; paneId: 'headless'; model: string; thinking: 'medium' }> {
+): Promise<{ name: string; paneId: 'headless'; model: string; thinking: ReviewThinking }> {
   const args = [
     '--mode', 'json', '-p', '--no-session', '--no-approve',
     '--model', input.preflight.model, '--thinking', input.preflight.thinking,

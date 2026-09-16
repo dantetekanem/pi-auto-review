@@ -7,7 +7,7 @@ Return one complete, decision-ready code review. The requester sees the change, 
 ## Inputs
 
 - Review context: PR URL or local change, plus optional direction.
-- Current Pi model. It must support `medium` thinking; preflight selects a medium-capable scoped model when needed.
+- Current Pi model and effective thinking level. Preflight preserves that level when a selected model supports it. A medium review can choose a medium-capable model; high and xhigh require an exact-level model.
 - Local checkout. Preflight reuses the newest matching reviewed checkout or the caller-supplied path.
 
 ## Preflight
@@ -15,9 +15,9 @@ Return one complete, decision-ready code review. The requester sees the change, 
 1. Resolve provider, PR title, base/head and local checkout.
 2. Fetch a missing named ref without checking it out. If the object remains unavailable, save the provider patch for diff-only review.
 3. Fetch PR body, threads/comments and CI into run-scoped files. Record unavailable optional inputs as gaps.
-4. Validate model and `medium` thinking.
+4. Validate model and the requested thinking level.
 5. Show target, range, checkout, model, thinking and artifact path.
-6. Start the mission. `agentic_code_review` starts a dedicated Pi session in a new Herdr pane; if pane launch fails twice, it runs the same mission in a headless Pi process. `/code-review` sets the current session to the preflighted model at `medium` and sends the mission there as a user message; no pane or watchdog is involved.
+6. Start the mission. `agentic_code_review` starts a dedicated Pi session in a new Herdr pane; if pane launch fails twice, it runs the same mission in a headless Pi process. `/code-review` sets the current session to the preflighted model and thinking level and sends the mission there as a user message; no pane or watchdog is involved.
 
 ## Pack
 
@@ -60,7 +60,7 @@ End the turn after spawning. The grouped report resumes the session with every l
 
 ## Recovery
 
-- Model mismatch: ask for a medium-capable model in the visible pane and resume.
+- Model mismatch: ask for the preflighted model and thinking level in the visible pane and resume.
 - Provider input unavailable: use the available metadata/patch and ask once only when a decision-changing input is required.
 - Scan failure: review diff-only.
 - Lane failure or stop: top-level session completes its assigned items.

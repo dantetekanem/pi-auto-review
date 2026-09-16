@@ -52,8 +52,10 @@ function createReviewFixture(t, sessionId = 'session-1') {
   const eventHandlers = new Map();
   const behavior = {
     confirm: true,
+    input: undefined,
     thinkingLevel: 'max',
     setModel: true,
+    setThinking: true,
     execute(command, args) {
       if (command === 'gs') return { code: 0, stdout: JSON.stringify({ number: 42, title: 'Keep eligibility outside Verdict', baseSha: sha('a'), headSha: sha('b'), baseRef: 'main', headRef: 'feature', htmlUrl: 'https://meteorite.shopify.io/repos/shop/world/pulls/42' }), stderr: '' };
       if (command === 'gh') return { code: 0, stdout: JSON.stringify({ number: 7, title: 'GitHub change', baseRefOid: sha('c'), headRefOid: sha('d'), url: 'https://github.com/owner/repo/pull/7' }), stderr: '' };
@@ -83,14 +85,14 @@ function createReviewFixture(t, sessionId = 'session-1') {
     getThinkingLevel: () => behavior.thinkingLevel,
     setThinkingLevel: level => {
       thinkingChanges.push(level);
-      behavior.thinkingLevel = level;
+      if (behavior.setThinking) behavior.thinkingLevel = level;
     },
   };
   const ctx = {
     cwd,
     hasUI: true,
     model: { provider: 'openai', id: 'gpt-test', reasoning: true },
-    thinkingLevel: 'max',
+    thinkingLevel: 'medium',
     modelRegistry: {
       find: (provider, id) => [ctx.model, ...(ctx.scopedModels ?? []).map(item => item.model)].find(model => model.provider === provider && model.id === id),
     },
@@ -104,6 +106,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
         confirmations.push(args);
         return behavior.confirm;
       },
+      input: async () => behavior.input,
     },
   };
   registerReview(pi, storage);
@@ -147,6 +150,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
     'agentic_code_review_save_learning',
+    'agentic_code_review_subscribe',
   ]);
 });
 
@@ -198,6 +202,67 @@ test('tool preflights the current model at medium and starts one visible Pi pane
   assert.equal(harness.execCalls.some(item => item.command === 'spawn_agent'), false);
   assert.deepEqual(harness.userMessages, []);
   assert.deepEqual(harness.thinkingChanges, []);
+});
+
+test('tool preserves active high and xhigh thinking through launch and saved preflight', async t => {
+  for (const [thinking, thinkingLevelMap] of [
+    ['high', undefined],
+    ['xhigh', { xhigh: 'xhigh' }],
+  ]) {
+    const harness = createReviewFixture(t, `active-${thinking}`);
+    harness.ctx.thinkingLevel = thinking;
+    harness.behavior.thinkingLevel = thinking;
+    harness.ctx.model.thinkingLevelMap = thinkingLevelMap;
+
+    const result = await harness.tool();
+    const start = call(harness, 'herdr', ['agent', 'start']);
+    assert.equal(result.details.preflight.thinking, thinking);
+    assert.equal(start.args[start.args.indexOf('--thinking') + 1], thinking);
+    assert.equal(readJson(result.details.paths.review).preflight.thinking, thinking);
+  }
+});
+
+test('current-session review adopts an exact xhigh-capable model without downgrading', async t => {
+  const harness = createReviewFixture(t);
+  harness.ctx.model.reasoning = false;
+  harness.ctx.thinkingLevel = 'xhigh';
+  harness.behavior.thinkingLevel = 'medium';
+  harness.ctx.scopedModels = [{ model: {
+    provider: 'openai', id: 'xhigh-model', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' },
+  } }];
+
+  await harness.command('');
+
+  assert.deepEqual(harness.modelChanges.map(model => `${model.provider}/${model.id}`), ['openai/xhigh-model']);
+  assert.deepEqual(harness.thinkingChanges, ['xhigh']);
+  assert.equal(readJson(harness.messages[0].message.details.paths.review).preflight.thinking, 'xhigh');
+  assert.match(harness.messages[0].message.content, /set model openai\/xhigh-model, thinking xhigh/);
+});
+
+test('current-session review refuses a runtime thinking clamp', async t => {
+  const harness = createReviewFixture(t);
+  harness.ctx.thinkingLevel = 'high';
+  harness.behavior.thinkingLevel = 'medium';
+  harness.behavior.setThinking = false;
+
+  await harness.command('');
+
+  assert.deepEqual(harness.thinkingChanges, ['high']);
+  assert.equal(harness.userMessages.length, 0);
+  assert.match(harness.notices[0][0], /could not select thinking high/);
+});
+
+test('xhigh preflight fails instead of falling back to a medium-only model', async t => {
+  const harness = createReviewFixture(t);
+  harness.ctx.thinkingLevel = 'xhigh';
+  harness.ctx.model.thinkingLevelMap = { xhigh: null };
+  harness.ctx.scopedModels = [{ model: { provider: 'anthropic', id: 'medium-model', reasoning: true } }];
+  harness.behavior.input = 'anthropic/medium-model';
+
+  await assert.rejects(harness.tool(), /xhigh-capable model selection/);
+  assert.match(harness.notices[0][0], /does not support xhigh/);
+  assert.equal(harness.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
+  assert.equal(exists(join(harness.storage, 'session-1')), false);
 });
 
 test('preflight reuses the newest matching reviewed checkout before falling back to the invoking cwd', async t => {

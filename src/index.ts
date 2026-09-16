@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerFindings } from './findings.ts';
 import { registerCodebaseLearning } from './codebase.ts';
+import { registerReviewSubscription } from './review-subscription.ts';
 import {
   completionFileName,
   formatPreflight,
@@ -234,7 +235,7 @@ function monitorReviewProcess(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   run: ReturnType<typeof prepareReview>,
-  initial: { name: string; paneId: string; model: string; thinking: 'medium' },
+  initial: { name: string; paneId: string; model: string; thinking: ReviewPreflight['thinking'] },
 ): void {
   const { runId, paths, preflight } = run.details;
   const controller = new AbortController();
@@ -280,6 +281,9 @@ async function adoptReviewModel(pi: ExtensionAPI, ctx: ExtensionContext, preflig
   }
   if (pi.getThinkingLevel() !== preflight.thinking) {
     pi.setThinkingLevel(preflight.thinking);
+    if (pi.getThinkingLevel() !== preflight.thinking) {
+      throw new Error(`This session could not select thinking ${preflight.thinking}. Select it, then run /code-review again.`);
+    }
     changes.push(`thinking ${preflight.thinking}`);
   }
   return changes;
@@ -295,6 +299,7 @@ function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
 export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
   registerFindings(pi, root);
   registerCodebaseLearning(pi, root);
+  registerReviewSubscription(pi, root, readPrompt('review-subscribe'));
 
   pi.registerTool({
     name: 'agentic_code_review_read_prompt',
@@ -397,10 +402,10 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         watchCompletion(pi, run);
         if (existsSync(review.paths.complete) || review.reviewSession.mode === 'current') continue;
         const current = await pi.exec('herdr', ['agent', 'get', review.reviewSession.name], { timeout: 10_000 }).catch(() => ({ code: 1, stdout: '', stderr: '' }));
-        let reviewSession: { name: string; paneId: string; model: string; thinking: 'medium' };
+        let reviewSession: { name: string; paneId: string; model: string; thinking: ReviewPreflight['thinking'] };
         if (current.code === 0) {
           const parsed = JSON.parse(current.stdout) as { result?: { agent?: { pane_id?: string } } };
-          reviewSession = { name: review.reviewSession.name, paneId: String(parsed.result?.agent?.pane_id ?? ''), model: review.preflight.model, thinking: 'medium' };
+          reviewSession = { name: review.reviewSession.name, paneId: String(parsed.result?.agent?.pane_id ?? ''), model: review.preflight.model, thinking: review.preflight.thinking };
         } else {
           reviewSession = await launchReviewPane(pi, ctx, { name: `${review.reviewSession.name}-fallback`, missionPath: review.paths.mission, preflight: review.preflight });
         }
