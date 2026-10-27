@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
@@ -12,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const piRoot = process.env.PI_PACKAGE_ROOT
@@ -147,6 +149,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review',
     'agentic_code_review_append_finding',
     'agentic_code_review_complete',
+    'agentic_code_review_execute_experiment',
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
     'agentic_code_review_save_learning',
@@ -180,14 +183,11 @@ test('tool preflights the current model at medium and starts one visible Pi pane
   const start = call(harness, 'herdr', ['agent', 'start']);
   assert.ok(start);
   assert.equal(start.args[start.args.indexOf('--kind') + 1], 'pi');
-  assert.equal(start.args[start.args.indexOf('--model') + 1], 'openai/gpt-test');
-  assert.equal(start.args[start.args.indexOf('--thinking') + 1], 'medium');
-  assert.ok(start.args.includes('--no-skills') && start.args.includes('--no-context-files'));
-  const toolList = start.args[start.args.indexOf('--tools') + 1];
-  assert.match(toolList, /spawn_swarm_agents/);
-  assert.match(toolList, /get_agent_status/);
-  assert.match(toolList, /agentic_code_review_read_prompt/);
-  assert.doesNotMatch(toolList, /agentic_code_review_wave|spawn_agent,|report_and_exit|task_create|task_list|read-critical|read-analyze|agentic_code_review,/);
+  assert.deepEqual(start.args.slice(start.args.indexOf('--') + 1), [
+    '--model', 'openai/gpt-test',
+    '--thinking', 'medium',
+    '--name', result.details.reviewSession.name,
+  ]);
 
   const prompt = call(harness, 'herdr', ['agent', 'prompt']);
   assert.equal(prompt.args.at(-1), `Read the complete auto-review mission at ${result.details.paths.mission} and execute it now.`);
@@ -478,30 +478,141 @@ test('prepared artifacts are private and completion wakes the invoking session e
   assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
 });
 
-test('watchdog resumes an early-idle review session and delivers its completion marker', async t => {
+test('completion attaches verified runner receipts rather than agent-supplied execution claims', async t => {
+  const harness = createReviewFixture(t);
+  await harness.command('https://github.com/owner/repo/pull/7');
+  const { paths, sessionId, runId } = harness.messages[0].message.details;
+  const directory = join(harness.storage, sessionId, `${runId}.experiments`);
+  const receiptPath = join(directory, 'replay-ABC123', 'receipt.json');
+  mkdirSync(dirname(receiptPath), { recursive: true });
+  const bytes = JSON.stringify({ runId, status: 'completed', observation: 'passed' });
+  writeFileSync(receiptPath, bytes);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  writeFileSync(join(directory, 'index.jsonl'), JSON.stringify({ checkId: 'head', path: 'replay-ABC123/receipt.json', sha256 }) + '\n');
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-10-26T00:00:00Z', executionReceipts: [{ path: 'invented' }] }));
+  writeFileSync(receiptPath, '{}');
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Checked.' }), /receipt/);
+  assert.equal(exists(paths.complete), false);
+  writeFileSync(receiptPath, bytes);
+  await harness.complete({ sessionId, runId, summary: 'Checked.' });
+  assert.deepEqual(readJson(paths.review).executionReceipts, [{ checkId: 'head', path: realpathSync(receiptPath), sha256 }]);
+});
+
+function createRecoveryFixture(t, deliveryCode = 0) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const harness = createReviewFixture(t);
   harness.pi.__disableAutoReviewWatchdog = false;
   const fallback = harness.behavior.execute.bind(harness.behavior);
-  let resumed = 0;
+  const agent = {
+    pane_id: 'w1:p2',
+    agent_status: 'done',
+    state_change_seq: 1,
+    interactive_ready: true,
+    launch_pending: false,
+  };
+  const reply = () => ({ code: 0, stdout: JSON.stringify({ result: { agent } }), stderr: '' });
+  let settle;
+  let attempts = 0;
   harness.behavior.execute = (command, args, options) => {
-    if (command === 'herdr' && args[0] === 'agent' && args[1] === 'wait') {
-      return { code: 0, stdout: JSON.stringify({ result: { agent: { agent_status: 'done' } } }), stderr: '' };
-    }
-    if (command === 'herdr' && args[0] === 'agent' && args[1] === 'prompt' && String(args.at(-1)).startsWith('Resume the auto-review mission')) {
-      resumed += 1;
-      const session = join(harness.storage, 'session-1');
-      const reviewName = readdirSync(session).find(name => name.endsWith('.review.json'));
-      const runId = reviewName.replace('.review.json', '');
-      writeFileSync(join(session, `${runId}.complete.json`), JSON.stringify({ sessionId: 'session-1', runId, status: 'complete', completedAt: '2026-09-15T00:00:00Z', summary: 'Recovered review completed.' }));
-      return { code: 0, stdout: '{}', stderr: '' };
+    if (command === 'herdr' && args[0] === 'agent') {
+      if (args[1] === 'get') return reply();
+      if (args[1] === 'wait') {
+        return new Promise(resolve => {
+          settle = resolve;
+          options.signal.addEventListener('abort', () => resolve({ code: 1, stdout: '' }), { once: true });
+        });
+      }
+      if (args[1] === 'prompt' && String(args.at(-1)).startsWith('Resume the auto-review mission')) {
+        attempts += 1;
+        return { code: deliveryCode, stdout: '', stderr: 'delivery result' };
+      }
     }
     return fallback(command, args, options);
   };
+  return {
+    ...harness,
+    agent,
+    attempts: () => attempts,
+    async idle(sequence, status = 'idle') {
+      Object.assign(agent, { agent_status: status, state_change_seq: sequence });
+      settle(reply());
+      await new Promise(setImmediate);
+    },
+    async advance(ms) {
+      t.mock.timers.tick(ms);
+      await new Promise(setImmediate);
+    },
+  };
+}
 
+test('watchdog requires five quiet minutes, rechecks activity, and caps follow-ups across reattachment', async t => {
+  const harness = createRecoveryFixture(t);
   await harness.tool();
-  await settleWatcher();
-  assert.equal(resumed, 1);
-  assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
+  await harness.idle(1);
+  await harness.advance(299_999);
+  assert.equal(harness.attempts(), 0);
+
+  Object.assign(harness.agent, { agent_status: 'working', state_change_seq: 2 });
+  await harness.advance(1);
+  assert.equal(harness.attempts(), 0);
+
+  await harness.idle(3);
+  harness.agent.state_change_seq = 5; // Work started and finished during the quiet window.
+  await harness.advance(300_000);
+  assert.equal(harness.attempts(), 0);
+
+  await harness.idle(5);
+  await harness.advance(300_000);
+  assert.equal(harness.attempts(), 1);
+  harness.eventHandlers.get('session_shutdown')();
+  await harness.eventHandlers.get('session_start')({}, harness.ctx);
+  await harness.advance(600_000);
+  assert.equal(harness.attempts(), 1);
+});
+
+test('watchdog requires a ready, non-busy agent with known activity at the final check', async t => {
+  for (const [name, state] of Object.entries({
+    bootstrapping: { launch_pending: true },
+    notReady: { interactive_ready: false },
+    blocked: { agent_status: 'blocked' },
+    unknown: { agent_status: 'unknown' },
+    missingActivity: { state_change_seq: undefined },
+  })) {
+    await t.test(name, async t => {
+      const harness = createRecoveryFixture(t);
+      await harness.tool();
+      await harness.idle(1);
+      Object.assign(harness.agent, state);
+      await harness.advance(300_000);
+      assert.equal(harness.attempts(), 0);
+    });
+  }
+});
+
+test('an uncertain follow-up delivery consumes the run allowance across reattachment', async t => {
+  const harness = createRecoveryFixture(t, 1);
+  await harness.tool();
+  await harness.idle(1, 'done');
+  await harness.advance(300_000);
+  harness.eventHandlers.get('session_shutdown')();
+  await harness.eventHandlers.get('session_start')({}, harness.ctx);
+  await harness.advance(600_000);
+  assert.equal(harness.attempts(), 1);
+});
+
+test('session reload does not restart a review whose agent is gone', async t => {
+  const harness = createReviewFixture(t);
+  await harness.tool();
+  harness.eventHandlers.get('session_shutdown')();
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  harness.behavior.execute = (command, args, options) => command === 'herdr' && args[1] === 'get'
+    ? { code: 1, stdout: '', stderr: 'agent_not_found' }
+    : fallback(command, args, options);
+
+  await harness.eventHandlers.get('session_start')({}, harness.ctx);
+
+  assert.equal(harness.execCalls.filter(item => item.command === 'herdr' && item.args[1] === 'split').length, 1);
+  assert.equal(harness.execCalls.filter(item => item.command === 'herdr' && item.args[1] === 'prompt').length, 1);
 });
 
 test('session reload reattaches a durable completion once without duplicating its handoff', async t => {
@@ -532,6 +643,10 @@ test('preflight selects a medium fallback before handling missing Herdr, aborts 
   delete process.env.HERDR_ENV;
   const headless = await harness.tool();
   assert.equal(headless.details.reviewSession.paneId, 'headless');
+  const headlessArgs = call(harness, 'pi', []).args;
+  for (const flag of ['--tools', '--no-skills', '--no-prompt-templates', '--no-context-files']) {
+    assert.equal(headlessArgs.includes(flag), false, flag);
+  }
   process.env.HERDR_ENV = '1';
   await assert.rejects(harness.tool('', AbortSignal.abort()), /abort/i);
   await assert.rejects(harness.tool('x'.repeat(8001)), /context/i);
@@ -580,56 +695,6 @@ test('lanes can read any lane prompt by name without a path', async t => {
   await assert.rejects(readPrompt('../package.json'), /Unknown review prompt/);
   await assert.rejects(readPrompt('taste', AbortSignal.abort()), /abort/i);
   assert.equal(harness.execCalls.length, 0);
-});
-
-test('workflow encodes one extended-teams batch and only the two low review tiers', () => {
-  const workflow = readFileSync(fileURLToPath(new URL('../prompts/workflow.md', import.meta.url)), 'utf8');
-  const zone = readFileSync(fileURLToPath(new URL('../prompts/review-zone.md', import.meta.url)), 'utf8');
-  const runtime = readFileSync(fileURLToPath(new URL('../src/runtime.ts', import.meta.url)), 'utf8');
-  const presentation = readFileSync(fileURLToPath(new URL('../prompts/presentation.md', import.meta.url)), 'utf8');
-
-  assert.match(workflow, /call `spawn_swarm_agents` from pi-extended-teams exactly once/);
-  assert.match(workflow, /completion_group: \{ delivery: "all-settled" \}/);
-  assert.match(workflow, /at most two `read-review` lanes plus at most one `read-collect`/);
-  assert.match(workflow, /run `read-review` and `read-collect` at `medium`/);
-  assert.match(workflow, /end the turn; the grouped report resumes this session/);
-  assert.match(workflow, /Every lane prompt opens with a fixed header copied from the review JSON/);
-  assert.match(workflow, /`prompts\.taste`, `prompts\.craft`, `prompts\.voice`/);
-  assert.match(workflow, /then the `craft\.md` pass/);
-  assert.match(workflow, /`vicinity above`\/`vicinity below`/);
-  assert.match(workflow, /`file:` section is marked `no parser`/);
-  assert.match(zone, /run the supplied `craft\.md` pass/);
-  assert.match(zone, /One `craft` line/);
-  assert.match(readFileSync(fileURLToPath(new URL('../prompts/pr-comments.md', import.meta.url)), 'utf8'), /A `fix` is a proposal, not a nit/);
-  assert.match(workflow, /call `agentic_code_review_read_prompt` with its name; never search the filesystem/);
-  assert.doesNotMatch(workflow, /Every prompt contains only/);
-  assert.match(zone, /If a path is missing, call `agentic_code_review_read_prompt`/);
-  assert.match(readFileSync(fileURLToPath(new URL('../prompts/collect.md', import.meta.url)), 'utf8'), /If a path is missing, call `agentic_code_review_read_prompt`/);
-  assert.match(workflow, /The top-level review session takes those items and completes them directly/);
-  assert.doesNotMatch(workflow, /agentic_code_review_wave|timeout_seconds|four minutes/);
-  assert.match(workflow, /Timing is measurement for later optimization, never a work limit/);
-  assert.match(workflow, /If the scan fails, record the reason and continue diff-only/);
-  assert.match(workflow, /ask once with `ask_user`.*resume from the answer, and finish/s);
-  assert.match(workflow, /Build `commentDrafts` with one exact full `pr-comments\.md` body per accepted finding/);
-  assert.doesNotMatch(workflow, /read-critical|read-analyze/);
-  assert.match(workflow, /no second batch/i);
-  assert.match(zone, /never read the whole pack or whole diff/);
-  assert.match(zone, /Stay under twelve direct file reads/);
-  assert.match(runtime, /'spawn_swarm_agents'/);
-  assert.doesNotMatch(runtime, /'spawn_agent'|'agentic_code_review_wave'|'task_create'|'task_list'/);
-  assert.match(presentation, /render every accepted bug, question, nit and optional fix in full/);
-  assert.match(presentation, /Do not paraphrase, group, truncate or replace comments with a count/);
-  assert.match(presentation, /exact proposed comment blocks do not count toward that limit/i);
-
-  const operational = [
-    workflow,
-    readFileSync(fileURLToPath(new URL('../prompts/session-launch.md', import.meta.url)), 'utf8'),
-    readFileSync(fileURLToPath(new URL('../prompts/coordinator.md', import.meta.url)), 'utf8'),
-    readFileSync(fileURLToPath(new URL('../prompts/launch.md', import.meta.url)), 'utf8'),
-    readFileSync(fileURLToPath(new URL('../prompts/deep-collect.md', import.meta.url)), 'utf8'),
-    readFileSync(fileURLToPath(new URL('../docs/runtime-v2.md', import.meta.url)), 'utf8'),
-  ].join('\n');
-  assert.doesNotMatch(operational, /\b(?:replaced|formerly|no longer|we found)\b|\b(?:b05b|e4c20|9023)[a-z0-9-]*\b|\b(?:35m|19m|7m49)\b/i);
 });
 
 function exists(path) {

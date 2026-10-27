@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 (2026-10-27)
+
+### Added
+
+- Opt-in `agentic_code_review_execute_experiment` tool for host-prepared checks, pinned inputs, limited execution grants, fresh replay and runner-generated receipts attached to completed reviews. Trusted programs run with host privileges and direct-child-only cleanup.
+- Restricted Node execution in disposable Docker containers with no network, read-only inputs, resource limits, protected receipts and no fallback to host execution. The first adapter exercises the committed finding-submission handler; it does not sandbox the Pi review session or support arbitrary repositories.
+- Calibrated, seeded experiment families for optional findings, with JSON member-order checks, failure reduction, stability checks and fresh replay. Controls, trials and follow-ups share one execution budget; uncertain outcomes remain inconclusive. Host preparation is still required.
+
+### Changed
+
+- Reviews gather proof and prior project knowledge before examining production behavior and tracing future impact. Reports distinguish source inspection, executed checks, demonstrated test sensitivity and missing evidence.
+- Review launches preserve configured tools, skills and context instead of supplying a fixed tool allowlist. Writing guidance uses available local skills rather than fetching instructions from the web.
+- Removed the obsolete test that matched exact wording in review prompts; executable review and experiment tests remain.
+
+### Fixed
+
+- Automatic review recovery waits for five quiet minutes, rechecks activity and permits at most one follow-up per run. Reloading does not relaunch a missing review agent or retry an uncertain delivery.
+
 ## 0.5.2 (2026-09-16)
 
 ### Changed

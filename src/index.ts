@@ -18,7 +18,9 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import timers from 'node:timers/promises';
 import { registerFindings } from './findings.ts';
+import { readExecutionReceipts, registerExperiments } from './experiments-tool.ts';
 import { registerCodebaseLearning } from './codebase.ts';
 import { registerReviewSubscription } from './review-subscription.ts';
 import {
@@ -232,40 +234,62 @@ function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>
   return close;
 }
 
+const REVIEW_QUIET_MS = 5 * 60_000;
+
+function idleStateSequence(stdout: string): number | undefined {
+  try {
+    const agent = (JSON.parse(stdout) as {
+      result?: { agent?: {
+        agent_status?: string;
+        state_change_seq?: number;
+        interactive_ready?: boolean;
+        launch_pending?: boolean;
+      } };
+    }).result?.agent;
+    if (agent?.interactive_ready !== true || agent.launch_pending === true) return undefined;
+    if ((agent.agent_status === 'idle' || agent.agent_status === 'done')
+      && Number.isSafeInteger(agent.state_change_seq)) return agent.state_change_seq;
+  } catch {}
+  return undefined;
+}
+
 function monitorReviewProcess(
   pi: ExtensionAPI,
-  ctx: ExtensionContext,
   run: ReturnType<typeof prepareReview>,
-  initial: { name: string; paneId: string; model: string; thinking: ReviewPreflight['thinking'] },
+  reviewSession: { name: string },
 ): void {
-  const { runId, paths, preflight } = run.details;
+  const { runId, paths } = run.details;
+  const followUpMarker = `${paths.complete}.follow-up`;
+  if (processMonitors.has(runId) || existsSync(followUpMarker)) return;
   const controller = new AbortController();
   processMonitors.set(runId, controller);
   void (async () => {
-    let reviewSession = initial;
-    let fallbackStarted = false;
-    while (!controller.signal.aborted && !existsSync(paths.complete)) {
-      const settled = await pi.exec('herdr', [
-        'agent', 'wait', reviewSession.name,
-        '--until', 'idle', '--until', 'done', '--until', 'blocked', '--timeout', '3600000',
-      ], { signal: controller.signal, timeout: 3_610_000 }).catch(error => ({ code: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) }));
-      if (controller.signal.aborted || existsSync(paths.complete)) break;
-      let status = '';
-      try { status = String((JSON.parse(settled.stdout) as { result?: { agent?: { agent_status?: unknown } } }).result?.agent?.agent_status ?? ''); } catch { status = ''; }
-      if (status === 'blocked') {
-        await pi.exec('herdr', ['agent', 'wait', reviewSession.name, '--until', 'working', '--timeout', '3600000'], { signal: controller.signal, timeout: 3_610_000 }).catch(() => undefined);
-        continue;
+    try {
+      while (!controller.signal.aborted && !existsSync(paths.complete)) {
+        const settled = await pi.exec('herdr', [
+          'agent', 'wait', reviewSession.name,
+          '--until', 'idle', '--until', 'done', '--timeout', '3600000',
+        ], { signal: controller.signal, timeout: 3_610_000 }).catch(() => ({ code: 1, stdout: '' }));
+        if (controller.signal.aborted || existsSync(paths.complete) || settled.code !== 0) break;
+        const idleSequence = idleStateSequence(settled.stdout);
+        if (idleSequence === undefined) break;
+
+        await timers.setTimeout(REVIEW_QUIET_MS, undefined, { signal: controller.signal }).catch(() => undefined);
+        if (controller.signal.aborted || existsSync(paths.complete)) break;
+        const current = await pi.exec('herdr', ['agent', 'get', reviewSession.name], {
+          signal: controller.signal, timeout: 10_000,
+        }).catch(() => ({ code: 1, stdout: '' }));
+        if (controller.signal.aborted || existsSync(paths.complete) || current.code !== 0) break;
+        if (idleStateSequence(current.stdout) !== idleSequence) continue;
+
+        // Reserve the only automatic follow-up before sending; uncertain delivery is not safe to retry.
+        try { closeSync(openSync(followUpMarker, 'wx', 0o600)); } catch { break; }
+        await pi.exec('herdr', ['agent', 'prompt', reviewSession.name, `Resume the auto-review mission at ${paths.mission}. Finish every required item and call agentic_code_review_complete.`], { signal: controller.signal, timeout: 30_000 }).catch(() => undefined);
+        break;
       }
-      await new Promise(resolvePromise => setTimeout(resolvePromise, 100));
-      if (existsSync(paths.complete)) break;
-      const resume = await pi.exec('herdr', ['agent', 'prompt', reviewSession.name, `Resume the auto-review mission at ${paths.mission}. Finish every required item and call agentic_code_review_complete.`], { signal: controller.signal, timeout: 30_000 }).catch(error => ({ code: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) }));
-      if (resume.code === 0) continue;
-      if (!fallbackStarted) {
-        reviewSession = await launchReviewPane(pi, ctx, { name: `${run.details.reviewSession.name}-fallback`, missionPath: paths.mission, preflight });
-        fallbackStarted = true;
-      }
+    } finally {
+      if (processMonitors.get(runId) === controller) processMonitors.delete(runId);
     }
-    processMonitors.delete(runId);
   })();
 }
 
@@ -298,6 +322,7 @@ function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
 
 export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
   registerFindings(pi, root);
+  registerExperiments(pi, root);
   registerCodebaseLearning(pi, root);
   registerReviewSubscription(pi, root, readPrompt('review-subscribe'));
 
@@ -334,13 +359,20 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       if (!review || typeof review !== 'object' || (review as { status?: unknown }).status !== 'complete' || typeof (review as { completedAt?: unknown }).completedAt !== 'string') {
         throw new Error('Complete the review JSON and its completedAt timestamp before the handoff.');
       }
-      const finalReview = review as { findings?: unknown; commentDrafts?: unknown };
+      const finalReview = review as { findings?: unknown; commentDrafts?: unknown; executionReceipts?: unknown };
       const findings = Array.isArray(finalReview.findings) ? finalReview.findings : [];
       const drafts = Array.isArray(finalReview.commentDrafts) ? finalReview.commentDrafts : [];
       const acceptedIds = findings.filter(item => item && typeof item === 'object' && (item as { state?: unknown }).state === 'accepted').map(item => (item as { id?: unknown }).id).filter((id): id is string => typeof id === 'string');
       const validDrafts = drafts.filter(item => item && typeof item === 'object' && typeof (item as { findingId?: unknown }).findingId === 'string' && typeof (item as { path?: unknown }).path === 'string' && Number.isInteger((item as { line?: unknown }).line) && typeof (item as { body?: unknown }).body === 'string' && Boolean((item as { body: string }).body.trim()));
       if (validDrafts.length !== drafts.length || acceptedIds.some(id => !validDrafts.some(item => (item as { findingId: string }).findingId === id))) {
         throw new Error('Every accepted finding needs one valid commentDraft before completion.');
+      }
+      const receipts = readExecutionReceipts(root, sessionId, runId);
+      if (receipts.length || finalReview.executionReceipts !== undefined) {
+        finalReview.executionReceipts = receipts;
+        const tempReview = `${reviewPath}.${randomUUID()}.tmp`;
+        writeFileSync(tempReview, JSON.stringify(review) + '\n', { flag: 'wx', mode: 0o600 });
+        renameSync(tempReview, reviewPath);
       }
       const marker = { sessionId, runId, status: (review as { status: string }).status, completedAt: (review as { completedAt: string }).completedAt, summary };
       const encoded = `${JSON.stringify(marker)}\n`;
@@ -368,7 +400,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       } catch {
         reviewSession = await runHeadlessReview(pi, { name: `${run.details.reviewSession.name}-headless`, missionPath: run.details.paths.mission, preflight });
       }
-      if (reviewSession.paneId !== 'headless' && watchdogEnabled(pi)) monitorReviewProcess(pi, ctx, run, reviewSession);
+      if (reviewSession.paneId !== 'headless' && watchdogEnabled(pi)) monitorReviewProcess(pi, run, reviewSession);
       const { runId, sessionId, paths } = run.details;
       return {
         content: [{
@@ -402,14 +434,8 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         watchCompletion(pi, run);
         if (existsSync(review.paths.complete) || review.reviewSession.mode === 'current') continue;
         const current = await pi.exec('herdr', ['agent', 'get', review.reviewSession.name], { timeout: 10_000 }).catch(() => ({ code: 1, stdout: '', stderr: '' }));
-        let reviewSession: { name: string; paneId: string; model: string; thinking: ReviewPreflight['thinking'] };
-        if (current.code === 0) {
-          const parsed = JSON.parse(current.stdout) as { result?: { agent?: { pane_id?: string } } };
-          reviewSession = { name: review.reviewSession.name, paneId: String(parsed.result?.agent?.pane_id ?? ''), model: review.preflight.model, thinking: review.preflight.thinking };
-        } else {
-          reviewSession = await launchReviewPane(pi, ctx, { name: `${review.reviewSession.name}-fallback`, missionPath: review.paths.mission, preflight: review.preflight });
-        }
-        if (watchdogEnabled(pi)) monitorReviewProcess(pi, ctx, run, reviewSession);
+        if (current.code !== 0) continue;
+        if (watchdogEnabled(pi)) monitorReviewProcess(pi, run, review.reviewSession);
       } catch {
         // A concurrently written or historical artifact is retried on the next session start.
       }

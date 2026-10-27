@@ -306,14 +306,6 @@ function parsePane(stdout: string): string {
 
 export const missionPrompt = (missionPath: string) => `Read the complete auto-review mission at ${missionPath} and execute it now.`;
 
-const REVIEW_TOOLS = [
-  'read', 'bash', 'edit', 'write',
-  'agentic_code_review_append_finding', 'agentic_code_review_read_learning', 'agentic_code_review_save_learning', 'agentic_code_review_complete', 'agentic_code_review_read_prompt',
-  'sparsity_scan', 'sparsity_collect',
-  'spawn_swarm_agents', 'get_agent_status', 'check_teammate', 'stop_teammate', 'read_inbox',
-  'ask_user', 'ask_user_batch',
-].join(',');
-
 export async function launchReviewPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -339,8 +331,6 @@ export async function launchReviewPane(
         '--model', input.preflight.model,
         '--thinking', input.preflight.thinking,
         '--name', name,
-        '--no-skills', '--no-prompt-templates', '--no-context-files',
-        '--tools', REVIEW_TOOLS,
       ], 310_000);
       started = true;
       const prompt = missionPrompt(input.missionPath);
@@ -363,8 +353,6 @@ export async function runHeadlessReview(
   const args = [
     '--mode', 'json', '-p', '--no-session', '--no-approve',
     '--model', input.preflight.model, '--thinking', input.preflight.thinking,
-    '--no-skills', '--no-prompt-templates', '--no-context-files',
-    '--tools', REVIEW_TOOLS,
     missionPrompt(input.missionPath),
   ];
   let error = '';

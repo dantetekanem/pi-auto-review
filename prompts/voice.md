@@ -40,7 +40,7 @@ Measured over 1,967 review comments on 734 PRs. Match the proportions, not just 
 
 ## Slop
 
-Follow the anti-slop directive at https://github.com/jalaalrd/anti-ai-slop-writing/blob/main/skills/anti-ai-slop-writing/SKILL.md and its banned list at `references/banned-words.md` in the same folder. Reading them is part of this contract, not another skill. The rules that matter most in a review:
+Use the installed `anti-slop-writing` and `humanizer` skills from the configured skill catalog/local location when available. They provide optional style guidance through a scoped exception to the review prompts' skill restrictions; they are not another review requirement. If unavailable, use this bundled voice contract; never fetch a remote directive or banned-word list. The rules that matter most in a review:
 
 No template rhythm. A report is not a form. Sections have the length their content needs; some are one sentence, one may run four paragraphs, and the same header does not appear in every report. If two consecutive sections read with the same shape (claim, evidence, ask), rewrite one of them.
 
@@ -56,7 +56,7 @@ Specifics over adjectives: the number of queries, the method name, the line, the
 
 Pick a side. One sentence for the counterpoint, then commit. `verified`, `inferred` and `unknown` already carry the uncertainty; the prose does not hedge on top of them.
 
-Before returning, run the directive's self-check on the whole text, then read it once as if saying it to the person. Never mention the rules.
+Before returning, check the whole text against the guidance above, then read it once as if saying it to the person. Never mention the rules.
 
 ## Words that mark text as machine-written
 
