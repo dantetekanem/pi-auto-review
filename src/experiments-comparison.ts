@@ -2,7 +2,8 @@ import { dirname, join } from 'node:path';
 import { digestBytes } from './experiments-contract.ts';
 import { describeRestricted, type RestrictedRequest } from './experiments-restricted-contract.ts';
 import { readPinnedFile } from './experiments-materialize.ts';
-import { parseNodeObservation, normalizerVersion, targetSignature } from './experiments-node.ts';
+import { parseNodeObservation } from './experiments-node.ts';
+import { nodeObservationContract } from './experiments-case-observations.ts';
 import { assessClaim, canonicalSha256, freezeOracle, type OracleBinding } from './experiments-oracle.ts';
 
 export type ReceiptReference = { path: string; sha256: string };
@@ -19,6 +20,7 @@ export async function readRestrictedAttempt(reference: ReceiptReference): Promis
   const directory = dirname(reference.path);
   const requestBytes = await readPinnedFile({ path: join(directory, 'request.json'), sha256: receipt.requestRecordSha256 }, 65536);
   const prepared = describeRestricted(JSON.parse(requestBytes.toString('utf8')));
+  const { targetSignature, normalizerVersion } = nodeObservationContract(prepared.request.caseId);
   if (receipt.runId !== prepared.request.runId || receipt.requestDigest !== prepared.digest
     || receipt.adapterSha256 !== prepared.request.adapterSha256 || receipt.probeSha256 !== prepared.request.probe.sha256
     || receipt.inputSha256 !== digestBytes(prepared.request.input)
@@ -29,7 +31,7 @@ export async function readRestrictedAttempt(reference: ReceiptReference): Promis
   const stderr = await readPinnedFile({ path: outputs.stderr, sha256: receipt.outputs?.stderr?.sha256 }, 1048576);
   if (stdout.length !== receipt.outputs.stdout.bytes || stderr.length !== receipt.outputs.stderr.bytes
     || stdout.length + stderr.length > prepared.request.limits.maxOutputBytes) throw new Error('Attempt output size changed.');
-  const observation = parseNodeObservation({ status: receipt.status, exitCode: receipt.exitCode, stdout, stderr }, prepared.request.targetId, prepared.request.input);
+  const observation = parseNodeObservation({ status: receipt.status, exitCode: receipt.exitCode, stdout, stderr }, prepared.request.targetId, prepared.request.input, prepared.request.caseId);
   const completed = receipt.status === 'completed' && receipt.sandboxed === true
     && receipt.cleanup === 'container-removed' && receipt.outputTruncated === false;
   if (completed && (observation.observation !== receipt.observation
@@ -50,6 +52,7 @@ export function comparisonContext(request: RestrictedRequest) {
 
 export function compareAttempts(binding: OracleBinding, base: AttemptEvidence, head: AttemptEvidence, inputClass: string) {
   const frozen = freezeOracle({ requirement: binding.requirement, oracle: binding.oracle });
+  const { targetSignature, normalizerVersion } = nodeObservationContract(base.request.caseId);
   const result = (status: string, reason: string) => ({ status, reason, oracleIdentity: frozen.identity,
     base: base.reference, head: head.reference, formalProof: false });
   if (binding.identity !== frozen.identity || binding.oracle.targetSignature !== targetSignature

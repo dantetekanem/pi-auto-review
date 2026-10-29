@@ -26,10 +26,11 @@ test('restricted scope snapshots exact requests and reserves one serial attempt 
   assert.equal(reservation.limits.timeoutMs, 1000);
   assert.equal(reservation.familySha256, hash);
   assert.throws(() => reserveRestricted(original, grant), /active/);
-  settleRestricted(grant, { durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
+  settleRestricted(grant, { lease: reservation.lease, durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
   assert.throws(() => reserveRestricted(r, grant), /match/);
-  assert.equal(reserveRestricted(original, grant).attempt, 2);
-  settleRestricted(grant, { durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
+  const second = reserveRestricted(original, grant);
+  assert.equal(second.attempt, 2);
+  settleRestricted(grant, { lease: second.lease, durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
 });
 
 test('forged, expired, revoked and changed authorities cannot reserve a workload', () => {
@@ -50,15 +51,44 @@ test('forged, expired, revoked and changed authorities cannot reserve a workload
 test('cumulative budgets include every reserved attempt and fence ambiguous cleanup', () => {
   const r = request();
   const grant = approveRestricted([r], { ...approval(), maxAttempts: 2, maxWallMs: 1100, maxOutputBytes: 1200 });
-  reserveRestricted(r, grant);
-  settleRestricted(grant, { durationMs: 900, capturedBytes: 1000, cleanupConfirmed: true });
-  assert.deepEqual(reserveRestricted(r, grant).limits, { timeoutMs: 200, maxOutputBytes: 200 });
-  settleRestricted(grant, { durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
+  const first = reserveRestricted(r, grant);
+  settleRestricted(grant, { lease: first.lease, durationMs: 900, capturedBytes: 1000, cleanupConfirmed: true });
+  const second = reserveRestricted(r, grant);
+  assert.deepEqual(second.limits, { timeoutMs: 200, maxOutputBytes: 200 });
+  settleRestricted(grant, { lease: second.lease, durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
   assert.throws(() => reserveRestricted(r, grant), /budget/);
   const fenced = approveRestricted([r], approval());
-  reserveRestricted(r, fenced);
-  settleRestricted(fenced, { durationMs: 1, capturedBytes: 0, cleanupConfirmed: false });
+  const uncertain = reserveRestricted(r, fenced);
+  settleRestricted(fenced, { lease: uncertain.lease, durationMs: 1, capturedBytes: 0, cleanupConfirmed: false });
   assert.throws(() => reserveRestricted(r, fenced), /cleanup/);
+});
+
+test('parallel authority reserves in-flight budgets and settlements own exactly one lease', () => {
+  const r = request();
+  const grant = approveRestricted([r], { ...approval(), maxConcurrency: 2, maxWallMs: 1500, maxOutputBytes: 1536 });
+  const first = reserveRestricted(r, grant);
+  first.limits.timeoutMs = 1;
+  const second = reserveRestricted(r, grant);
+  assert.deepEqual(second.limits, { timeoutMs: 500, maxOutputBytes: 512 });
+  assert.throws(() => reserveRestricted(r, grant), /active|concurrency/);
+  assert.throws(() => settleRestricted(grant, { lease: {}, durationMs: 0, capturedBytes: 0, cleanupConfirmed: true }), /lease/);
+
+  settleRestricted(grant, { lease: first.lease, durationMs: 100, capturedBytes: 100, cleanupConfirmed: true });
+  const third = reserveRestricted(r, grant);
+  assert.deepEqual(third.limits, { timeoutMs: 900, maxOutputBytes: 924 });
+  assert.throws(() => settleRestricted(grant, { lease: first.lease, durationMs: 0, capturedBytes: 0, cleanupConfirmed: true }), /lease/);
+  settleRestricted(grant, { lease: second.lease, durationMs: 1, capturedBytes: 0, cleanupConfirmed: false });
+  settleRestricted(grant, { lease: third.lease, durationMs: 1, capturedBytes: 0, cleanupConfirmed: true });
+  assert.throws(() => reserveRestricted(r, grant), /cleanup/);
+});
+
+test('concurrency requires a bounded host choice and never borrows reserved resources', () => {
+  for (const maxConcurrency of [0, 3, 1.5, '2', [2]]) {
+    assert.throws(() => approveRestricted([request()], { ...approval(), maxConcurrency }), /concurrency|budget/);
+  }
+  const grant = approveRestricted([request()], { ...approval(), maxConcurrency: 2, maxWallMs: 1000 });
+  reserveRestricted(request(), grant);
+  assert.throws(() => reserveRestricted(request(), grant), /budget/);
 });
 
 test('backend identity and required controller support fail closed', () => {

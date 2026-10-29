@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "m4-history-v1",
+  "phase": "publication-copy",
+  "evaluatedAuthorSha256": "87ddc2411a53e82ecb3dcdaa15631ccfabbe64505e840e3b2ba17ee16c51d1fa",
+  "evaluatedSealSha256": "b7fa2d52603da4bcc7bf3ff63cae62e3b4ac4351656521a494629c183dbdea41",
+  "files": [
+    {
+      "path": "evaluation/corpus/public.json",
+      "sha256": "d0e102345c80df254b7659412d6b759f1ebc45d45205b869898b0c0af14677a8"
+    },
+    {
+      "path": "evaluation/corpus/author.json",
+      "sha256": "355b9c1db067442e0903c8ef822a146a24b80fb4963bc02c2f63a2e391013813"
+    },
+    {
+      "path": "evaluation/scoring.ts",
+      "sha256": "a02360ccbb715dde815ec95ead3651fb6dc51e9ba0a31def737e651dcdeacf86"
+    },
+    {
+      "path": "src/experiments-oracle.ts",
+      "sha256": "95e3775c44a20b7797222b983cbeb8ccecfdd4d9787d4d1dc1e573ad03a404ea"
+    }
+  ],
+  "note": "Publication copy: evidence paths are relative to an external, unpublished replay directory. Labels and receipt hashes are unchanged; author status records the original freeze. Earlier evaluations used the evaluatedAuthorSha256 and evaluatedSealSha256 identities above. This file is not launch authority."
+}

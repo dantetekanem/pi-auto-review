@@ -6,12 +6,14 @@ import { reserveRestricted, settleRestricted, type RestrictedRequest } from './e
 import { materializeRestrictedInputs, readPinnedFile } from './experiments-materialize.ts';
 import { runDocker } from './experiments-docker.ts';
 import { startRestrictedRecord, finishRestrictedRecord } from './experiments-receipts.ts';
+import { nodeObservationContract, caseObservationMismatch, type NodeCase } from './experiments-case-observations.ts';
 
-const loader = `
+const loader = (caseId?: NodeCase) => `
 import { registerHooks } from 'node:module';
 registerHooks({ resolve(specifier, context, next) {
   const projected = {
-    '@earendil-works/pi-coding-agent': 'file:///bundle/deps/pi/dist/core/tools/file-mutation-queue.js',
+    '@earendil-works/pi-coding-agent': 'file:///bundle/deps/${caseId ? 'review-api.mjs' : 'pi/dist/core/tools/file-mutation-queue.js'}',
+    '@mariozechner/pi-tui': 'file:///bundle/deps/tui/index.js',
     'typebox': 'file:///bundle/deps/typebox/build/index.mjs'
   }[specifier];
   const result = projected ? { url: projected, shortCircuit: true } : next(specifier, context);
@@ -29,17 +31,17 @@ export default async function* (source) {
   }
 }
 `;
-const adapterFiles = ['experiments-node.ts', 'experiments-docker.ts', 'experiments-restricted-contract.ts', 'experiments-materialize.ts', 'experiments-receipts.ts', 'experiments-seccomp.json'];
+const adapterFiles = ['experiments-node.ts', 'experiments-case-observations.ts', 'experiments-docker.ts', 'experiments-restricted-contract.ts', 'experiments-materialize.ts', 'experiments-receipts.ts', 'experiments-seccomp.json'];
 const adapterSha256 = digestBytes(Buffer.concat(adapterFiles.map(path => readFileSync(new URL(path, import.meta.url)))));
 export const nodeAdapterIdentity = () => adapterSha256;
-export const targetSignature = 'optional findings must be nonblocking';
-export const normalizerVersion = 'node-findings-v1';
+export const { targetSignature, normalizerVersion } = nodeObservationContract();
 
 type NodeExecution = { status: string; exitCode: number | null; stdout: Buffer; stderr: Buffer };
 type Event = { type: string; name?: string; skip?: unknown; todo?: unknown; code?: string; message?: string };
 
 /** Test events and returned data are child observations, not proof that hostile code told the truth. */
-export function parseNodeObservation(execution: NodeExecution, targetId: string, input: string) {
+export function parseNodeObservation(execution: NodeExecution, targetId: string, input: string, caseId?: NodeCase) {
+  const { targetSignature } = nodeObservationContract(caseId);
   const result = (status: string, observation: string | null, detail = '', normalized: unknown = null) => ({ status, observation, detail, normalized });
   if (execution.status !== 'completed') return result(execution.status, null);
   let events: Event[];
@@ -62,11 +64,15 @@ export function parseNodeObservation(execution: NodeExecution, targetId: string,
   try {
     if (observations.length !== 1) throw new Error('Missing or duplicate target observation.');
     const normalized = JSON.parse(observations[0].message!.slice('AR_OBSERVATION '.length));
-    const expectedKinds = ['fix', ...JSON.parse(input).items.map((item: { kind: string }) => item.kind)];
-    if (!Array.isArray(normalized.records) || normalized.records.length !== expectedKinds.length
-      || normalized.records.some((record: { kind: string; blocks: boolean }, index: number) => record.kind !== expectedKinds[index] || typeof record.blocks !== 'boolean')
-      || normalized.bugs !== 0) throw new Error('Target invocation data did not match the declared input.');
-    const mismatch = normalized.records.some((record: { blocks: boolean }) => record.blocks);
+    let mismatch: boolean;
+    if (caseId) mismatch = caseObservationMismatch(caseId, input, normalized);
+    else {
+      const expectedKinds = ['fix', ...JSON.parse(input).items.map((item: { kind: string }) => item.kind)];
+      if (!Array.isArray(normalized.records) || normalized.records.length !== expectedKinds.length
+        || normalized.records.some((record: { kind: string; blocks: boolean }, index: number) => record.kind !== expectedKinds[index] || typeof record.blocks !== 'boolean')
+        || normalized.bugs !== 0) throw new Error('Target invocation data did not match the declared input.');
+      mismatch = normalized.records.some((record: { blocks: boolean }) => record.blocks);
+    }
     if ((target.type === 'test:fail') !== mismatch || execution.exitCode !== (mismatch ? 1 : 0)) throw new Error('Assertion, observed values and exit status disagree.');
     return result('completed', mismatch ? 'target_failure' : 'passed', mismatch ? targetSignature : '', normalized);
   } catch (error) { return result('completed', 'probe_error', String(error)); }
@@ -75,6 +81,8 @@ export function parseNodeObservation(execution: NodeExecution, targetId: string,
 export async function runRestrictedNode(request: RestrictedRequest, grant: unknown, artifactRoot: string, guardPath: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
   const admission = reserveRestricted(request, grant);
+  const snapshot = admission.request;
+  const contract = nodeObservationContract(snapshot.caseId);
   const started = performance.now();
   const controller = new AbortController();
   let timedOut = false;
@@ -92,13 +100,12 @@ export async function runRestrictedNode(request: RestrictedRequest, grant: unkno
   };
   let cleanupConfirmed = true;
   try {
-    const snapshot = admission.request;
     if (snapshot.adapterSha256 !== adapterSha256) throw new Error('Node adapter identity changed.');
     record = await startRestrictedRecord(artifactRoot, guardPath, snapshot);
     await mkdir(record.bundle, { mode: 0o755 });
     materialized = await materializeRestrictedInputs(snapshot, record.bundle, controller.signal);
     const probe = await readPinnedFile(snapshot.probe, 65536, controller.signal);
-    for (const [path, bytes] of Object.entries({ 'probe.mjs': probe, 'loader.mjs': loader, 'reporter.mjs': reporter, 'input.json': snapshot.input })) {
+    for (const [path, bytes] of Object.entries({ 'probe.mjs': probe, 'loader.mjs': loader(snapshot.caseId), 'reporter.mjs': reporter, 'input.json': snapshot.input })) {
       await writeFile(join(record.bundle, path), bytes, { flag: 'wx', mode: 0o444 });
     }
     controller.signal.throwIfAborted();
@@ -136,18 +143,20 @@ export async function runRestrictedNode(request: RestrictedRequest, grant: unkno
     }
     execution.durationMs = Math.ceil(performance.now() - started);
     settleRestricted(grant, {
+      lease: admission.lease,
       durationMs: execution.durationMs,
       capturedBytes: execution.outputTruncated ? admission.limits.maxOutputBytes : execution.stdout.length + execution.stderr.length,
       cleanupConfirmed,
     });
   }
-  const observation = parseNodeObservation(execution, request.targetId, request.input);
+  const observation = parseNodeObservation(execution, snapshot.targetId, snapshot.input, snapshot.caseId);
   return finishRestrictedRecord(record!, { ...execution, status: observation.status, detail: observation.detail || execution.detail }, {
     ...observation, requestDigest: admission.digest, approval: { attempt: admission.attempt, approvedBy: admission.approvedBy, familySha256: admission.familySha256 },
     source: materialized?.source, dependencies: materialized?.dependencies,
-    backend: request.backend, configuration: execution.configuration,
-    probeSha256: request.probe.sha256, inputSha256: digestBytes(request.input), adapterSha256,
-    targetId: request.targetId, targetSignature, normalizerVersion, limits: admission.limits,
-    mocks: ['Pi registration and reviewer context'], dependencyProjection: 'Actual Pi file-mutation queue and Typebox; native Node TypeScript stripping; no full SDK boot',
+    backend: snapshot.backend, configuration: execution.configuration,
+    probeSha256: snapshot.probe.sha256, inputSha256: digestBytes(snapshot.input), adapterSha256,
+    targetId: snapshot.targetId, ...contract, limits: admission.limits,
+    mocks: snapshot.caseId ? ['Case-specific inert registration, launch or lifecycle boundaries; see pinned probe and dependency manifest'] : ['Pi registration and reviewer context'],
+    dependencyProjection: snapshot.caseId ? `Sealed ${snapshot.caseId} dependencies; no full SDK boot` : 'Actual Pi file-mutation queue and Typebox; native Node TypeScript stripping; no full SDK boot',
   });
 }

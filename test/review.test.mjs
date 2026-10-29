@@ -125,7 +125,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
   return {
     dir, storage, cwd, pi, commands, tools, messages, userMessages, notices, confirmations, execCalls, modelChanges, thinkingChanges, eventHandlers, behavior, ctx,
     command: context => commands.get('code-review').handler(context, ctx),
-    tool: (context = '', signal) => tools.get('agentic_code_review').execute('call-1', { context }, signal, undefined, ctx),
+    tool: (context = '', signal, options = {}) => tools.get('agentic_code_review').execute('call-1', { context, ...options }, signal, undefined, ctx),
     complete: input => tools.get('agentic_code_review_complete').execute('complete-1', input, undefined, undefined, ctx),
   };
 }
@@ -150,6 +150,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_append_finding',
     'agentic_code_review_complete',
     'agentic_code_review_execute_experiment',
+    'agentic_code_review_next_action',
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
     'agentic_code_review_save_learning',
@@ -263,6 +264,67 @@ test('xhigh preflight fails instead of falling back to a medium-only model', asy
   assert.match(harness.notices[0][0], /does not support xhigh/);
   assert.equal(harness.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
   assert.equal(exists(join(harness.storage, 'session-1')), false);
+});
+
+test('tool accepts per-run model and thinking without mutating the invoking session', async t => {
+  const harness = createReviewFixture(t);
+  const selected = {
+    provider: 'openai-codex', id: 'gpt-6.1-sol', reasoning: true,
+    thinkingLevelMap: { xhigh: 'xhigh' },
+  };
+  harness.ctx.modelRegistry.find = (provider, id) =>
+    provider === selected.provider && id === selected.id ? selected : undefined;
+
+  const result = await harness.tool('', undefined, { model: 'openai-codex/gpt-6.1-sol', thinking: 'xhigh' });
+  const start = call(harness, 'herdr', ['agent', 'start']);
+  assert.equal(result.details.preflight.model, 'openai-codex/gpt-6.1-sol');
+  assert.equal(result.details.preflight.thinking, 'xhigh');
+  assert.deepEqual(start.args.slice(start.args.indexOf('--') + 1), [
+    '--model', 'openai-codex/gpt-6.1-sol', '--thinking', 'xhigh', '--name', result.details.reviewSession.name,
+  ]);
+  assert.deepEqual(harness.modelChanges, []);
+  assert.deepEqual(harness.thinkingChanges, []);
+  assert.equal(harness.ctx.model.id, 'gpt-test');
+  assert.equal(harness.ctx.thinkingLevel, 'medium');
+  const { elapsedMs: _elapsedMs, ...preflight } = readJson(result.details.paths.review).preflight;
+  assert.deepEqual(preflight, {
+    target: 'local working tree', provider: 'local', number: null, title: null,
+    base: 'HEAD', head: sha('e'), checkout: harness.cwd,
+    model: 'openai-codex/gpt-6.1-sol', thinking: 'xhigh',
+  });
+
+  const headless = createReviewFixture(t, 'headless-options');
+  headless.ctx.modelRegistry.find = (provider, id) =>
+    provider === selected.provider && id === selected.id ? selected : undefined;
+  const fallback = headless.behavior.execute.bind(headless.behavior);
+  headless.behavior.execute = (command, args, options) => {
+    if (command === 'herdr') return { code: 1, stdout: '', stderr: 'pane unavailable' };
+    return fallback(command, args, options);
+  };
+
+  const recovered = await headless.tool('', undefined, { model: 'openai-codex/gpt-6.1-sol', thinking: 'xhigh' });
+  const pi = call(headless, 'pi', ['--mode', 'json']);
+  assert.deepEqual(pi.args.slice(0, 9), [
+    '--mode', 'json', '-p', '--no-session', '--no-approve', '--model', 'openai-codex/gpt-6.1-sol', '--thinking', 'xhigh',
+  ]);
+  assert.equal(recovered.details.preflight.model, 'openai-codex/gpt-6.1-sol');
+  assert.equal(recovered.details.preflight.thinking, 'xhigh');
+});
+
+test('explicit unavailable or unsupported per-run options fail before artifacts or launch', async t => {
+  const unknown = createReviewFixture(t);
+  await assert.rejects(unknown.tool('', undefined, { model: 'missing/model', thinking: 'xhigh' }), /unavailable|registered/i);
+  assert.equal(exists(join(unknown.storage, 'session-1')), false);
+  assert.equal(unknown.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
+
+  const unsupported = createReviewFixture(t, 'unsupported-options');
+  unsupported.ctx.modelRegistry.find = () => ({
+    provider: 'openai', id: 'medium-only', reasoning: true,
+    thinkingLevelMap: { xhigh: null },
+  });
+  await assert.rejects(unsupported.tool('', undefined, { model: 'openai/medium-only', thinking: 'xhigh' }), /does not support xhigh/i);
+  assert.equal(exists(join(unsupported.storage, 'unsupported-options')), false);
+  assert.equal(unsupported.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
 });
 
 test('preflight reuses the newest matching reviewed checkout before falling back to the invoking cwd', async t => {
@@ -425,6 +487,26 @@ test('session reload keeps a current-session run on its watcher instead of launc
   assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
 });
 
+test('completion validates optional evidence graphs against this run before publishing a marker', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  const review = { ...readJson(paths.review), status: 'complete', completedAt: '2026-10-27T00:00:00Z',
+    evidenceGraph: { schemaVersion: 1, runId, nodes: [{ id: 'missing', kind: 'evidence', identities: [] }], incompatibilities: [] } };
+  writeFileSync(paths.review, JSON.stringify(review));
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Source inspected.' }), /map record.*missing/i);
+  assert.equal(exists(paths.complete), false);
+
+  const record = { id: 'missing', runId, kind: 'evidence', repository: 'repo', revision: 'head', state: 'observed', sources: [] };
+  writeFileSync(paths.map, readFileSync(paths.map, 'utf8') + JSON.stringify(record) + '\n');
+  const result = await harness.complete({ sessionId, runId, summary: 'Source inspected.' });
+  assert.equal(result.terminate, true);
+  assert.equal(readJson(paths.complete).runId, runId);
+  const assessment = readJson(paths.review).evidenceAssessment;
+  assert.equal(assessment.basis, 'recorded-identities');
+  assert.equal(assessment.nodes[0].status, 'unknown');
+  assert.deepEqual(assessment.nodes[0].reasons, ['missing-identity']);
+});
+
 test('prepared artifacts are private and completion wakes the invoking session exactly once', async t => {
   const harness = createReviewFixture(t);
   const result = await harness.tool('https://meteorite.shopify.io/repos/shop/world/pulls/42');
@@ -476,6 +558,15 @@ test('prepared artifacts are private and completion wakes the invoking session e
   await assert.rejects(harness.complete({ sessionId, runId, summary: 'Different' }), /different completion/i);
   await settleWatcher();
   assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
+});
+
+test('completion refuses unlinked machine evidence even when its prose is marked complete', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, sessionId, runId } = (await harness.tool('')).details;
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-10-27T00:00:00Z',
+    machineClaims: [{ claimId: 'missing', kind: 'execution', requestDigest: 'a'.repeat(64), receipts: ['b'.repeat(64)] }] }));
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Confirmed by experiment.' }), /claim|graph/i);
+  assert.equal(exists(paths.complete), false);
 });
 
 test('completion attaches verified runner receipts rather than agent-supplied execution claims', async t => {

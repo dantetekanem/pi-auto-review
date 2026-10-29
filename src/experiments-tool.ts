@@ -10,12 +10,14 @@ import { runRestrictedNode } from './experiments-node.ts';
 import { canonicalSha256 } from './experiments-oracle.ts';
 import { readRestrictedAttempt } from './experiments-comparison.ts';
 import { validatePreparedFamily, runPreparedFamily, type PreparedFamily } from './experiments-family.ts';
+import { ExperimentReservations, experimentKey } from './experiments-reservations.ts';
+import { runWorkerBatch } from './experiments-workers.ts';
 
 type Bootstrap = { path?: string; sha256?: string };
 type PlanIdentity = { expiresAt: string; target: string; checkout: string; base: string; head: string };
 type ApprovedPlan = PlanIdentity & (
   | { schemaVersion: 1; checks: { id: string; maxAttempts: number; request: Omit<ReplayRequest, 'runId'> }[] }
-  | { schemaVersion: 2; scope: 'worker-only'; familySha256: string; family?: PreparedFamily;
+  | { schemaVersion: 2; scope: 'worker-only'; familySha256: string; family?: PreparedFamily; workers?: number;
       budget: { maxAttempts: number; maxWallMs: number; maxOutputBytes: number };
       checks: { id: string; maxAttempts: number; request: Omit<RestrictedRequest, 'runId'> }[] }
 );
@@ -59,6 +61,10 @@ function loadPlan(bootstrap: Bootstrap): ApprovedPlan | undefined {
       const value = plan.budget[key as keyof typeof plan.budget];
       return !Number.isSafeInteger(value) || value < 1 || value > cap;
     }))) throw new Error('Unsupported restricted plan scope or budget. Ordinary Pi sessions are not sandboxed.');
+  if ('workers' in plan && (plan.schemaVersion !== 2 || !Number.isInteger(plan.workers)
+    || ![1, 2].includes(plan.workers ?? 0) || (plan.family && plan.workers !== 1))) {
+    throw new Error('Only restricted check batches support one or two host-selected workers.');
+  }
   const ids = new Set<string>();
   let totalAttempts = 0;
   for (const check of plan.checks) {
@@ -98,7 +104,7 @@ export function readExecutionReceipts(root: string, sessionId: string, runId: st
   if (lines.length > 65) throw new Error('Too many execution receipts.');
   return lines.map(line => {
     const entry = JSON.parse(line);
-    if (!/^[\w-]{1,80}$/.test(entry.checkId) || !/^(?:replay|restricted|family)-[A-Za-z0-9]{6}\/receipt\.json$/.test(entry.path)
+    if (!/^[\w-]{1,80}$/.test(entry.checkId) || !/^(?:replay|restricted|family|batch)-[A-Za-z0-9]{6}\/receipt\.json$/.test(entry.path)
       || !/^[a-f0-9]{64}$/.test(entry.sha256)) throw new Error('Invalid execution receipt reference.');
     const path = join(directory, entry.path);
     const bytes = boundedRead(path, 1048576);
@@ -114,7 +120,7 @@ export function registerExperiments(
   pi: ExtensionAPI,
   root: string,
   bootstrap: Bootstrap = { path: process.env.PI_AUTO_REVIEW_REPLAY_PLAN, sha256: process.env.PI_AUTO_REVIEW_REPLAY_SHA256 },
-): void {
+): (ctx: ExtensionContext, sessionId: string, runId: string) => string[] {
   // Capture once, before model turns. Tool arguments cannot replace this snapshot.
   bootstrap = { ...bootstrap };
   let plan: ApprovedPlan | undefined;
@@ -127,9 +133,13 @@ export function registerExperiments(
   let owner: string | undefined;
   let boundReview: string | undefined;
   const grants = new Map<string, BoundCheck>();
-  let restrictedActive = false;
+  const reservations = new ExperimentReservations();
+  const lastAttempts = new Map<string, string>();
+  const activeSlots = new Set<number>();
   let familyActive = false;
   let familyConsumed = false;
+  let batchActive = false;
+  let batchConsumed = false;
   pi.on('session_start', (_event, ctx) => {
     if (!owner && ctx.hasUI) owner = ctx.sessionManager.getSessionId();
   });
@@ -155,34 +165,54 @@ export function registerExperiments(
     parameters: Type.Object({
       sessionId: Type.String({ maxLength: 128 }),
       runId: Type.String(),
-      checkId: Type.Optional(Type.String({ maxLength: 80, description: 'Host-prepared check ID. Omit both selectors to list availability.' })),
+      checkId: Type.Optional(Type.String({ maxLength: 80, description: 'Host-prepared check ID. Omit all selectors to list availability.' })),
+      checkIds: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { minItems: 1, maxItems: 64,
+        description: 'One finite batch of distinct host-approved restricted checks. Worker count comes only from the host plan.' })),
       familyId: Type.Optional(Type.String({ maxLength: 80, description: 'Run one host-prepared finite family, including its controls, without per-trial model turns.' })),
+      replayOf: Type.Optional(Type.String({ maxLength: 36, description: 'For a deliberate fresh check replay, name its latest settled attempt ID. Consumes the existing budget.' })),
     }, { additionalProperties: false }),
     async execute(_id, input, signal, _update, ctx) {
       signal?.throwIfAborted();
-      if (Object.keys(input).some(key => !['sessionId', 'runId', 'checkId', 'familyId'].includes(key))) throw new Error('Unexpected execution argument.');
-      const { sessionId, runId, checkId, familyId } = input;
-      if (checkId !== undefined && familyId !== undefined) throw new Error('Use only one execution selector.');
-      if (familyActive) throw new Error('A prepared family is already active.');
+      if (Object.keys(input).some(key => !['sessionId', 'runId', 'checkId', 'checkIds', 'familyId', 'replayOf'].includes(key))) throw new Error('Unexpected execution argument.');
+      const { sessionId, runId, checkId, checkIds, familyId, replayOf } = input;
+      if ([checkId, checkIds, familyId].filter(value => value !== undefined).length > 1) throw new Error('Use only one execution selector.');
+      if (replayOf !== undefined && (checkId === undefined || !/^[0-9a-f-]{36}$/.test(replayOf))) throw new Error('A replay needs a check ID and prior attempt ID.');
+      if (familyActive || batchActive) throw new Error('A prepared family or batch is already active.');
       assertIdentity(sessionId, runId);
       if (!plan) {
         const reason = problem ?? 'No host-approved replay plan is configured.';
-        if (checkId !== undefined || familyId !== undefined) throw new Error(reason);
+        if (checkId !== undefined || checkIds !== undefined || familyId !== undefined) throw new Error(reason);
         return { content: [{ type: 'text' as const, text: reason }], details: { available: false, reason } };
       }
       assertReview(ctx, sessionId, runId, plan);
-      if (checkId === undefined && familyId === undefined) {
+      if (checkId === undefined && checkIds === undefined && familyId === undefined) {
         const checks = plan.checks.map(check => ({ id: check.id,
           revision: check.request.profile === 'docker-node-v1' ? check.request.source.revision : check.request.revision,
           maxAttempts: check.maxAttempts }));
         const details = { available: true, profile: plan.schemaVersion === 2 ? 'docker-node-v1' : 'trusted-program',
           scope: plan.schemaVersion === 2 ? 'worker-only' : 'trusted-host', sandboxed: false, checks,
+          workers: plan.schemaVersion === 2 ? plan.workers ?? 1 : 1,
           families: plan.schemaVersion === 2 && plan.family ? [{ id: plan.family.id, seed: plan.family.spec.seed, trials: plan.family.spec.trials }] : [] };
         return { content: [{ type: 'text' as const, text: JSON.stringify(details) }], details };
       }
       if (checkId !== undefined && !plan.checks.some(check => check.id === checkId)) throw new Error('Unknown approved check ID.');
       if (familyId !== undefined && (plan.schemaVersion !== 2 || plan.family?.id !== familyId)) throw new Error('Unknown prepared family ID.');
       if (familyId !== undefined && familyConsumed) throw new Error('Prepared family was already consumed.');
+      let batchCheckIds: string[] | undefined;
+      if (checkIds !== undefined) {
+        if (plan.schemaVersion !== 2 || plan.family) throw new Error('Batches require a restricted check plan without a family.');
+        if (batchConsumed) throw new Error('Prepared batch was already consumed.');
+        if (activeSlots.size) throw new Error('A restricted worker resource is already active.');
+        if (!Array.isArray(checkIds) || !checkIds.length || checkIds.length > 64
+          || new Set(checkIds).size !== checkIds.length) throw new Error('Invalid or duplicate batch check IDs.');
+        const requestKeys = checkIds.map(id => {
+          const check = plan.checks.find(item => item.id === id);
+          if (!check) throw new Error('Unknown approved batch check ID.');
+          return experimentKey({ ...check.request, runId }, plan.familySha256);
+        });
+        if (new Set(requestKeys).size !== requestKeys.length) throw new Error('Duplicate canonical inputs in batch.');
+        batchCheckIds = [...checkIds];
+      }
       if (!boundReview) {
         // Exclusive, durable consumption prevents reloads or another process refreshing budgets.
         try {
@@ -196,7 +226,8 @@ export function registerExperiments(
         const approvedBy = `host-plan:${bootstrap.sha256}:owner:${owner}`;
         if (plan.schemaVersion === 2) {
           const requests = plan.checks.map(check => describeRestricted({ ...check.request, runId }).request);
-          const grant = approveRestricted(requests, { ...plan.budget, approvedBy, familySha256: plan.familySha256, expiresAt: Date.parse(plan.expiresAt) });
+          const grant = approveRestricted(requests, { ...plan.budget, approvedBy, familySha256: plan.familySha256,
+            maxConcurrency: plan.workers ?? 1, expiresAt: Date.parse(plan.expiresAt) });
           plan.checks.forEach((check, index) => grants.set(check.id, { request: requests[index], grant, remaining: check.maxAttempts }));
         } else {
           for (const check of plan.checks) {
@@ -207,8 +238,10 @@ export function registerExperiments(
         }
       }
       const directory = artifactDirectory(root, sessionId, runId);
-      const recordReference = (id: string, path: string) => {
-        const reference = { checkId: id, path: relative(directory, path), sha256: digestBytes(readFileSync(path)) };
+      const expiresAt = Date.parse(plan.expiresAt);
+      const oracleIdentity = plan.schemaVersion === 2 ? plan.familySha256 : canonicalSha256(plan);
+      const recordReference = (id: string, path: string, reservation?: { experimentKey: string; replayOf?: string }) => {
+        const reference = { checkId: id, path: relative(directory, path), sha256: digestBytes(readFileSync(path)), ...reservation };
         try {
           appendFileSync(join(directory, 'index.jsonl'), JSON.stringify(reference) + '\n', { mode: 0o600 });
         } catch (error) {
@@ -216,31 +249,74 @@ export function registerExperiments(
         }
         return { path, sha256: reference.sha256 };
       };
-      const executeCheck = async (id: string) => {
+      const workers = plan.schemaVersion === 2 ? plan.workers ?? 1 : 1;
+      const executeCheck = async (id: string, slot = 0, executionSignal = signal) => {
+        executionSignal?.throwIfAborted();
         const approved = grants.get(id);
         if (!approved) throw new Error('Approved check grant is unavailable.');
         if (approved.remaining === 0) throw new Error('Approved check attempts exhausted.');
-        if (restrictedActive) throw new Error('A restricted attempt is already active.');
+        if (activeSlots.has(slot)) throw new Error('Restricted worker resource is already leased.');
+        const key = experimentKey(approved.request, oracleIdentity, batchCheckIds && workers > 1 ? 'parallel-2-v1' : 'serial-v1');
+        // A prepared family deliberately repeats checks for stability and fresh replay.
+        const predecessor = familyId === undefined ? replayOf : lastAttempts.get(key);
+        const reservation = reservations.reserve(key, expiresAt, predecessor);
         approved.remaining--;
 
         const execute = async () => {
           if (approved.request.profile === 'trusted-program') {
-            return runTrustedReplay(approved.request, approved.grant, directory, { signal });
+            return runTrustedReplay(approved.request, approved.grant, directory, { signal: executionSignal });
           }
-          restrictedActive = true;
+          activeSlots.add(slot);
           try {
-            const result = await runRestrictedNode(approved.request, approved.grant, directory, `${bootstrap.path}.active`, signal);
+            const guard = `${bootstrap.path}.active${batchCheckIds && workers > 1 ? `-${slot}` : ''}`;
+            const result = await runRestrictedNode(approved.request, approved.grant, directory, guard, executionSignal);
             return result.receipt;
           } finally {
-            restrictedActive = false;
+            activeSlots.delete(slot);
           }
         };
-        const receipt = await execute();
-        const reference = recordReference(id, receipt.paths.receipt);
-        return { receipt, reference };
+        try {
+          const receipt = await execute();
+          const reference = recordReference(id, receipt.paths.receipt, { experimentKey: key, ...(predecessor ? { replayOf: predecessor } : {}) });
+          reservations.settle(reservation, { attemptId: receipt.attemptId,
+            cleanupConfirmed: receipt.cleanup === 'container-removed' || receipt.cleanup === 'workspace-removed' });
+          lastAttempts.set(key, receipt.attemptId);
+          return { receipt, reference };
+        } catch (error) {
+          reservations.fence(reservation);
+          throw error;
+        }
       };
       let details;
-      if (familyId !== undefined && plan.schemaVersion === 2 && plan.family) {
+      if (batchCheckIds) {
+        batchConsumed = true;
+        batchActive = true;
+        try {
+          const result = await runWorkerBatch(batchCheckIds, workers, async (id, slot, workerSignal) => {
+            const { receipt, reference } = await executeCheck(id, slot, workerSignal);
+            return { attemptId: receipt.attemptId, status: receipt.status, cleanup: receipt.cleanup, reference };
+          }, signal);
+          mkdirSync(directory, { recursive: true, mode: 0o700 });
+          const receiptPath = join(mkdtempSync(join(directory, 'batch-')), 'receipt.json');
+          const receipt = {
+            ...result,
+            schemaVersion: 1,
+            profile: 'experiment-batch-v1',
+            sessionId,
+            runId,
+            checkIds: batchCheckIds,
+            planSha256: bootstrap.sha256,
+            paths: { receipt: receiptPath },
+            requirementTruthEstablished: false,
+            formalProof: false,
+          };
+          writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+          const reference = recordReference('batch', receiptPath);
+          details = { receipt, receiptSha256: reference.sha256 };
+        } finally {
+          batchActive = false;
+        }
+      } else if (familyId !== undefined && plan.schemaVersion === 2 && plan.family) {
         familyConsumed = true;
         familyActive = true;
         try {
@@ -274,4 +350,13 @@ export function registerExperiments(
       return { content: [{ type: 'text' as const, text: JSON.stringify(details) }], details };
     },
   });
+  return (ctx, sessionId, runId) => {
+    if (plan?.schemaVersion !== 2 || !plan.family || familyConsumed || familyActive || batchActive || activeSlots.size
+      || (!boundReview && existsSync(`${bootstrap.path}.claimed`))) return [];
+    try {
+      assertIdentity(sessionId, runId);
+      assertReview(ctx, sessionId, runId, plan);
+      return [plan.family.id];
+    } catch { return []; }
+  };
 }

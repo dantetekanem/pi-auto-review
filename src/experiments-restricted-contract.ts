@@ -1,10 +1,12 @@
 import { isAbsolute } from 'node:path';
 import { digestBytes } from './experiments-contract.ts';
+import { validateCaseInput, type NodeCase } from './experiments-case-observations.ts';
 
 export type PinnedFile = { path: string; sha256: string };
 export type RestrictedRequest = {
   runId: string;
   profile: 'docker-node-v1';
+  caseId?: NodeCase;
   backend: {
     socketPath: string; engineId: string; imageId: string; platform: 'linux/arm64';
     seccompPath: string; seccompSha256: string;
@@ -21,13 +23,24 @@ export type RestrictedRequest = {
   limits: { timeoutMs: number; maxOutputBytes: number };
 };
 export type RestrictedApproval = {
-  approvedBy: string; familySha256: string; expiresAt: number;
-  maxAttempts: number; maxWallMs: number; maxOutputBytes: number;
+  approvedBy: string;
+  familySha256: string;
+  expiresAt: number;
+  maxAttempts: number;
+  maxWallMs: number;
+  maxOutputBytes: number;
+  maxConcurrency?: number;
 };
 export type RestrictedGrant = Readonly<{ profile: 'docker-node-v1'; familySha256: string }>;
 type Authority = {
-  digests: Set<string>; approval: RestrictedApproval; attempts: number;
-  durationMs: number; capturedBytes: number; active: boolean; revoked: boolean; fenced: boolean;
+  digests: Set<string>;
+  approval: RestrictedApproval;
+  attempts: number;
+  durationMs: number;
+  capturedBytes: number;
+  active: Map<object, RestrictedRequest['limits']>;
+  revoked: boolean;
+  fenced: boolean;
 };
 const authorities = new WeakMap<object, Authority>();
 const hash = (value: string) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -45,7 +58,7 @@ export function safeRelativePath(value: string): boolean {
 }
 
 export function describeRestricted(value: RestrictedRequest) {
-  keys(value, ['runId', 'profile', 'backend', 'source', 'dependencies', 'probe', 'adapterSha256', 'input', 'targetId', 'limits']);
+  keys(value, ['runId', 'profile', 'caseId', 'backend', 'source', 'dependencies', 'probe', 'adapterSha256', 'input', 'targetId', 'limits']);
   if (value.profile !== 'docker-node-v1' || !text(value.runId, 128) || !/^[\w-]+$/.test(value.runId)) {
     throw new Error('Unsupported restricted profile or run.');
   }
@@ -80,6 +93,7 @@ export function describeRestricted(value: RestrictedRequest) {
     throw new Error('Invalid restricted probe, input or limits.');
   }
   JSON.parse(value.input);
+  if (value.caseId !== undefined) validateCaseInput(value.caseId, value.input);
   const request = structuredClone(value);
   return { request, digest: digestBytes(JSON.stringify(request)) };
 }
@@ -105,7 +119,10 @@ export function approveRestricted(requests: RestrictedRequest[], approval: Restr
   if (!Array.isArray(requests) || requests.length < 1 || requests.length > 128
     || !text(approval.approvedBy, 200) || !hash(approval.familySha256)
     || !integer(approval.maxAttempts, 64) || !integer(approval.maxWallMs, 600000)
-    || !integer(approval.maxOutputBytes, 16777216)) throw new Error('Invalid restricted authority or budget.');
+    || !integer(approval.maxOutputBytes, 16777216)
+    || (approval.maxConcurrency !== undefined && !integer(approval.maxConcurrency, 2))) {
+    throw new Error('Invalid restricted authority, concurrency or budget.');
+  }
   if (!Number.isSafeInteger(approval.expiresAt) || approval.expiresAt <= Date.now()
     || approval.expiresAt > Date.now() + 86400000) throw new Error('Invalid restricted authority expiry.');
   const prepared = requests.map(describeRestricted);
@@ -113,7 +130,7 @@ export function approveRestricted(requests: RestrictedRequest[], approval: Restr
   const grant = Object.freeze({ profile: 'docker-node-v1' as const, familySha256: approval.familySha256 });
   authorities.set(grant, {
     digests: new Set(prepared.map(item => item.digest)), approval: { ...approval },
-    attempts: 0, durationMs: 0, capturedBytes: 0, active: false, revoked: false, fenced: false,
+    attempts: 0, durationMs: 0, capturedBytes: 0, active: new Map(), revoked: false, fenced: false,
   });
   return grant;
 }
@@ -130,29 +147,34 @@ export function reserveRestricted(request: RestrictedRequest, grant: unknown) {
   if (!authority.digests.has(prepared.digest)) throw new Error('Restricted grant does not match this request.');
   if (authority.revoked || Date.now() >= authority.approval.expiresAt) throw new Error('Restricted grant expired or revoked.');
   if (authority.fenced) throw new Error('Previous cleanup is unconfirmed; reconcile it before new work.');
-  if (authority.active) throw new Error('A restricted attempt is already active.');
-  const timeoutMs = Math.min(request.limits.timeoutMs, authority.approval.maxWallMs - authority.durationMs, authority.approval.expiresAt - Date.now());
-  const maxOutputBytes = Math.min(request.limits.maxOutputBytes, authority.approval.maxOutputBytes - authority.capturedBytes);
+  if (authority.active.size >= (authority.approval.maxConcurrency ?? 1)) throw new Error('Restricted concurrency is already active.');
+  const heldLimits = [...authority.active.values()];
+  const reservedMs = heldLimits.reduce((sum, limits) => sum + limits.timeoutMs, 0);
+  const reservedBytes = heldLimits.reduce((sum, limits) => sum + limits.maxOutputBytes, 0);
+  const timeoutMs = Math.min(request.limits.timeoutMs,
+    authority.approval.maxWallMs - authority.durationMs - reservedMs, authority.approval.expiresAt - Date.now());
+  const maxOutputBytes = Math.min(request.limits.maxOutputBytes, authority.approval.maxOutputBytes - authority.capturedBytes - reservedBytes);
   if (authority.attempts >= authority.approval.maxAttempts || timeoutMs <= 0 || maxOutputBytes <= 0) {
     throw new Error('Restricted cumulative budget exhausted.');
   }
-  authority.active = true;
+  const lease = Object.freeze({});
+  authority.active.set(lease, { timeoutMs, maxOutputBytes });
   authority.attempts++;
   return {
-    ...prepared, attempt: authority.attempts, approvedBy: authority.approval.approvedBy,
+    ...prepared, lease, attempt: authority.attempts, approvedBy: authority.approval.approvedBy,
     familySha256: authority.approval.familySha256, limits: { timeoutMs, maxOutputBytes },
   };
 }
 
-export function settleRestricted(grant: unknown, result: { durationMs: number; capturedBytes: number; cleanupConfirmed: boolean }): void {
+export function settleRestricted(grant: unknown, result: { lease: object; durationMs: number; capturedBytes: number; cleanupConfirmed: boolean }): void {
   const authority = authorityFor(grant);
-  if (!authority.active) throw new Error('No active restricted attempt.');
+  if (!authority.active.has(result.lease)) throw new Error('Unknown or already settled restricted lease.');
   if (![result.durationMs, result.capturedBytes].every(value => Number.isSafeInteger(value) && value >= 0)
     || typeof result.cleanupConfirmed !== 'boolean') throw new Error('Invalid restricted accounting.');
   authority.durationMs += result.durationMs;
   authority.capturedBytes += result.capturedBytes;
-  authority.fenced = !result.cleanupConfirmed;
-  authority.active = false;
+  authority.fenced ||= !result.cleanupConfirmed;
+  authority.active.delete(result.lease);
 }
 
 export function revokeRestricted(grant: unknown): void {

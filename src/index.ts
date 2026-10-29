@@ -20,8 +20,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import timers from 'node:timers/promises';
 import { registerFindings } from './findings.ts';
+import { registerAdaptive } from './adaptive-tool.ts';
 import { readExecutionReceipts, registerExperiments } from './experiments-tool.ts';
 import { registerCodebaseLearning } from './codebase.ts';
+import { readCompletionEvidence } from './evidence-completion.ts';
+import { readMachineEvidence } from './evidence-receipts.ts';
 import { registerReviewSubscription } from './review-subscription.ts';
 import {
   completionFileName,
@@ -31,6 +34,7 @@ import {
   preflightReview,
   runHeadlessReview,
   type ReviewPreflight,
+  type ReviewSelection,
 } from './runtime.ts';
 
 const promptPath = (name: string) => fileURLToPath(new URL(`../prompts/${name}.md`, import.meta.url));
@@ -322,7 +326,8 @@ function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
 
 export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
   registerFindings(pi, root);
-  registerExperiments(pi, root);
+  const availableFamilies = registerExperiments(pi, root);
+  registerAdaptive(pi, root, availableFamilies);
   registerCodebaseLearning(pi, root);
   registerReviewSubscription(pi, root, readPrompt('review-subscribe'));
 
@@ -355,11 +360,14 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) throw new Error('Invalid review completion identity.');
       const reviewPath = join(root, sessionId, `${runId}.review.json`);
       const completePath = join(root, sessionId, completionFileName(runId));
-      const review: unknown = JSON.parse(readFileSync(reviewPath, 'utf8'));
+      const reviewContents = readFileSync(reviewPath, 'utf8');
+      const review: unknown = JSON.parse(reviewContents);
       if (!review || typeof review !== 'object' || (review as { status?: unknown }).status !== 'complete' || typeof (review as { completedAt?: unknown }).completedAt !== 'string') {
         throw new Error('Complete the review JSON and its completedAt timestamp before the handoff.');
       }
-      const finalReview = review as { findings?: unknown; commentDrafts?: unknown; executionReceipts?: unknown };
+      const finalReview = review as { findings?: unknown; commentDrafts?: unknown; executionReceipts?: unknown;
+        evidenceGraph?: unknown; evidenceContext?: unknown; evidenceAssessment?: unknown;
+        machineClaims?: unknown; machineAssessment?: unknown };
       const findings = Array.isArray(finalReview.findings) ? finalReview.findings : [];
       const drafts = Array.isArray(finalReview.commentDrafts) ? finalReview.commentDrafts : [];
       const acceptedIds = findings.filter(item => item && typeof item === 'object' && (item as { state?: unknown }).state === 'accepted').map(item => (item as { id?: unknown }).id).filter((id): id is string => typeof id === 'string');
@@ -367,8 +375,21 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       if (validDrafts.length !== drafts.length || acceptedIds.some(id => !validDrafts.some(item => (item as { findingId: string }).findingId === id))) {
         throw new Error('Every accepted finding needs one valid commentDraft before completion.');
       }
+      const mapPath = join(root, sessionId, `${runId}.map.jsonl`);
+      const evidence = readCompletionEvidence(finalReview.evidenceGraph, mapPath, runId, finalReview.evidenceContext);
       const receipts = readExecutionReceipts(root, sessionId, runId);
-      if (receipts.length || finalReview.executionReceipts !== undefined) {
+      const machine = finalReview.machineClaims === undefined ? undefined
+        : await readMachineEvidence(finalReview.machineClaims, receipts, runId, evidence);
+      signal?.throwIfAborted();
+      if (readFileSync(reviewPath, 'utf8') !== reviewContents) throw new Error('Review changed during evidence verification; no completion was published.');
+      if (evidence && readCompletionEvidence(finalReview.evidenceGraph, mapPath, runId, finalReview.evidenceContext)?.mapSha256 !== evidence.mapSha256) {
+        throw new Error('Evidence map changed during verification; no completion was published.');
+      }
+      if (!evidence && finalReview.evidenceAssessment !== undefined) throw new Error('An evidence assessment requires its graph.');
+      if (!machine && finalReview.machineAssessment !== undefined) throw new Error('A machine assessment requires its receipt-linked claims.');
+      if (evidence) finalReview.evidenceAssessment = evidence;
+      if (machine) finalReview.machineAssessment = machine;
+      if (evidence || machine || receipts.length || finalReview.executionReceipts !== undefined) {
         finalReview.executionReceipts = receipts;
         const tempReview = `${reviewPath}.${randomUUID()}.tmp`;
         writeFileSync(tempReview, JSON.stringify(review) + '\n', { flag: 'wx', mode: 0o600 });
@@ -388,9 +409,17 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
     },
   });
 
-  const launch = async (context: string, ctx: ExtensionContext, signal?: AbortSignal, prepared?: ReviewPreflight, preparedRunId?: string, checkout?: string) => {
+  const launch = async (
+    context: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+    prepared?: ReviewPreflight,
+    preparedRunId?: string,
+    checkout?: string,
+    selection?: ReviewSelection,
+  ) => {
     signal?.throwIfAborted();
-    const preflight = prepared ?? await preflightReview(pi, ctx, context, root, checkout);
+    const preflight = prepared ?? await preflightReview(pi, ctx, context, root, checkout, selection);
     const run = prepareReview(pi, ctx, context, root, preflight, 'pane', signal, preparedRunId);
     const closeWatcher = watchCompletion(pi, run);
     try {
@@ -484,9 +513,18 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         description: 'Absolute local checkout for the target. Omit to reuse the newest matching checkout from prior review artifacts, then the invoking cwd.',
         maxLength: 4000,
       })),
+      model: Type.Optional(Type.String({
+        description: 'Registered provider/model ID for this review run, such as provider/model. Omit to inherit the invoking model selection.',
+        pattern: '^[^/\\s]+/[^\\s]+$',
+        maxLength: 500,
+      })),
+      thinking: Type.Optional(Type.Union([
+        'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+      ].map(level => Type.Literal(level)), { description: 'Thinking level for this review run. Omit to inherit the invoking level.' })),
     }),
-    async execute(_id, { context = '', checkout }, signal, _onUpdate, ctx) {
-      return launch(context, ctx, signal, undefined, undefined, checkout);
+    async execute(_id, { context = '', checkout, model, thinking }, signal, _onUpdate, ctx) {
+      const selection = model === undefined && thinking === undefined ? undefined : { model, thinking };
+      return launch(context, ctx, signal, undefined, undefined, checkout, selection);
     },
   });
 }

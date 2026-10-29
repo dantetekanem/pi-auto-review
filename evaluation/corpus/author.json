@@ -1,0 +1,332 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "m4-history-v1",
+  "status": "replayed; independent milestone acceptance pending",
+  "visibility": "AUTHOR ONLY. Do not pass this file, replay scripts, repair history, summaries or matching rules to benchmark reviewers.",
+  "concealment": "Best effort only in unrestricted Pi. The lead has seen all labels; this is not a blinded lead holdout.",
+  "adjudication": "Inventory by m4-case-inventory; lead replay adjudication. Evaluation findings need an independent judge applying these rules; the scorer does not infer them.",
+  "rules": [
+    "One true positive per known underlying defect, matching cause and impact rather than keywords.",
+    "A repeated known defect counts as a duplicate, including findings at both producer and consumer.",
+    "Reject a claim about intended behavior only when the specific claim conflicts with the visible rationale. A legitimate-change case is not a bug-free commit.",
+    "Novel plausible defects and unmatched claims remain unadjudicated until independently checked, never automatic false positives.",
+    "Setup failure, unsupported scenarios and invalid fixtures are not passing runtime checks.",
+    "Keep gold frozen. New validated defects require a separately versioned adjudication/corpus record, not reviewer edits."
+  ],
+  "cases": [
+    {
+      "id": "restore",
+      "split": "tuning",
+      "knownDefects": [
+        {
+          "id": "restoration-shape",
+          "criterion": "one-handoff",
+          "match": "Wrong persisted custom-entry shape in completionDelivered prevents recognition of an already-delivered completion; restoration sends it again.",
+          "locations": [
+            "src/index.ts:completionDelivered",
+            "src/index.ts:session_start"
+          ],
+          "exclude": [
+            "General watcher reliability without this cause",
+            "Generic duplicate-message concerns",
+            "Coordinator thinking policy"
+          ],
+          "repair": "c3bca5ff8623dedb11d956cc8f2199f2aac7b766",
+          "provenance": [
+            "Head src/index.ts promises one completion handoff; supported SDK0.85.1 SessionManager produces top-level custom_message/customType/details.",
+            "Repair commit and fixture correction corroborate the defect; the probe uses actual SessionManager entries."
+          ],
+          "sdk": {
+            "version": "0.85.1",
+            "manifest": {
+              "path": "m4-restoration-1/case-dependencies.json",
+              "sha256": "fa8fdc64154525dfb391e644428e277bb2267e9f06532f64e672c5a8020aa158"
+            }
+          },
+          "origin": "Source-supported introduction. Base lacks the restoration feature and is UNRESOLVED, not an execution-comparable pass."
+        }
+      ],
+      "evidence": {
+        "summary": {
+          "path": "m4-restoration-1/summary.json",
+          "sha256": "3598f396e527be7d34197af8af4acc64ac6e2a27771171aee9bbeade4c65c99d"
+        },
+        "attempts": [
+          {
+            "name": "head",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "cca6a08d-fc24-49de-9d2c-db38d507daf3",
+            "requestDigest": "a3983fd2157ff69dd4b32aae76b792239a0be5d13c183d7dae134080691fac02",
+            "receipt": {
+              "path": "m4-restoration-1/attempts/restricted-adwZkL/receipt.json",
+              "sha256": "a71f4fd77ff8bd9fc773056d17d8a13bfbcad4149d2d0f66e3adb5dd441a4a55"
+            }
+          },
+          {
+            "name": "fresh-head-replay",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "71da5cdd-825c-490f-9474-847931061f2f",
+            "requestDigest": "a3983fd2157ff69dd4b32aae76b792239a0be5d13c183d7dae134080691fac02",
+            "receipt": {
+              "path": "m4-restoration-1/attempts/restricted-8IySjJ/receipt.json",
+              "sha256": "049a9516e533f7c5b307da9e85a08107b9a171e7b0e440b65fe172dc511cc6e8"
+            }
+          },
+          {
+            "name": "repaired",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "d063d2c5-5e2b-485c-9a81-60c32a5613dd",
+            "requestDigest": "8c886a0b6358b3e057b55e03123607466586524ae33141512e072dab703e5ee3",
+            "receipt": {
+              "path": "m4-restoration-1/attempts/restricted-VGfWFI/receipt.json",
+              "sha256": "e3250adb61c534edf63c86ba6fb56693650202ce8848b324b65f7f1fb74e0418"
+            }
+          },
+          {
+            "name": "base-applicability",
+            "status": "completed",
+            "predicate": "UNRESOLVED",
+            "attemptId": "e10a8a18-7e88-441b-937c-f58fa4fdbe13",
+            "requestDigest": "eed2f5647f7a525ddd43ae73e458236cce8385bccc7ed40520dd5ec6af70679d",
+            "receipt": {
+              "path": "m4-restoration-1/attempts/restricted-iqeZO5/receipt.json",
+              "sha256": "fc3927013cf0fd95b5f517b505efc35c7e6b99e172cecbe4d61d02afcb82a7f2"
+            }
+          },
+          {
+            "name": "missing-dependencies",
+            "status": "setup_error",
+            "predicate": "UNRESOLVED",
+            "attemptId": "339d0438-5fc5-49ba-9340-420cbd71f2d7",
+            "requestDigest": "5028f035c9562a7da49f7426842cd224e3e7eb9774b5fb82f3b9007376b260f6",
+            "receipt": {
+              "path": "m4-restoration-1/attempts/restricted-t5qLqU/receipt.json",
+              "sha256": "40e0653150eda3b559e209de2818228f7fc41934464829841fcd8f51de7d565d"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "dispatch",
+      "split": "tuning",
+      "knownDefects": [],
+      "intentionalChange": "Removal of agentic_code_review_wave/raw worker dispatch restores configured team registration and model_slot favorites.",
+      "rationale": [
+        "c21a3ec1d62c497d7dfeca1b6ee867a6adb3d1ab commit body",
+        "Head prompts/workflow.md and actual registration/headless argv"
+      ],
+      "falsePositiveRule": "A claim that the removed raw wave itself must be retained conflicts with the explicit change. New defects in the replacement require adjudication.",
+      "scopeLimit": "Inert launch boundary and direct prompt inspection do not prove live model compliance or whole-commit correctness.",
+      "evidence": {
+        "summary": {
+          "path": "m4-dispatch-1/summary.json",
+          "sha256": "c14f34ac19a1e0a96b1a72680af7044c3c0ccf8b8f0dafe0d2a71ab52b0e537d"
+        },
+        "attempts": [
+          {
+            "name": "base",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "ff5b368a-8ffe-43a7-951e-0c975484ed70",
+            "requestDigest": "07e35d0814ca954315fed3e81cd8928caada29287aad0e584881003f1b2e5f6d",
+            "receipt": {
+              "path": "m4-dispatch-1/attempts/restricted-avdJL9/receipt.json",
+              "sha256": "a559011b604641d341abe440b47c20871c8db11fd2517ecaa6e6c0032884275a"
+            }
+          },
+          {
+            "name": "head",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "7c8d0f69-b207-4eff-a332-804d0b45ac82",
+            "requestDigest": "cddeaaed8bbeebcd1b503095d318d12d694cb54e1f262b3fc057c64474bccb6a",
+            "receipt": {
+              "path": "m4-dispatch-1/attempts/restricted-GEL3xi/receipt.json",
+              "sha256": "8ad53725333651e9d7cad8d59b2f53b786c8252ffb87c3a2f2456b43839a0e6a"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "progress",
+      "split": "holdout",
+      "knownDefects": [
+        {
+          "id": "progress-reset",
+          "criterion": "stable-final-progress",
+          "match": "Context-aware progress extraction includes the changing animated dots before the cleanup suffix, restarting erase/retype on each refresh and hiding the unchanged final report text.",
+          "locations": [
+            "extensions/ui/status-widget.ts:splitProgressDisplay",
+            "extensions/ui/status-widget.ts:animateEntry",
+            "extensions/index.ts:renderTeamActivityStatusNow"
+          ],
+          "exclude": [
+            "Preference against animation in general",
+            "Request for a cleanup label alone"
+          ],
+          "repair": "9993db51c3a57f9a807dd0613789575fcc1b1445",
+          "provenance": [
+            "Repair CHANGELOG.md and timed integration test record the readability defect; this is a maintainer repair criterion, not a located pre-introduction product specification.",
+            "Actual parent/head status producer and widget render four frames with the same final progress; two fresh head attempts produce identical failing frames."
+          ],
+          "origin": "Observed passing immediate parent632e181 and failing head5366abb with the same probe/dependencies. Introduction is reviewer/source-supported: the head adds activity-colors.ts, so source path sets differ and the strict machine comparison reports incompatible rather than introduced-violation."
+        }
+      ],
+      "rejectedCandidate": {
+        "head": "20260d6a9479c9c8386d2ffe03493ababc12cbc7",
+        "result": "PASS",
+        "reason": "Its last-delimiter parser leaves final progress visible. The initial static inventory attributed the introduction too early."
+      },
+      "scopeLimit": "Fake clocks/timers, injected active run/fence, inert lifecycle/host and pinned TUI0.73.1. No live helper or terminal.",
+      "evidence": {
+        "summary": {
+          "path": "m4-progress-1/summary.json",
+          "sha256": "833c2d06b32e3b1027d42f577d49f6f3dd84157a121464584d52cf84d15ca1c1"
+        },
+        "attempts": [
+          {
+            "name": "original-candidate",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "0b74c74c-067c-4d65-acbe-4526dd65ab00",
+            "requestDigest": "af7fc15bc78f7a4b42fe081eecab67a3f317cefca8e2c980ce3c44e06542eb01",
+            "receipt": {
+              "path": "m4-progress-1/attempts/restricted-0BAJcY/receipt.json",
+              "sha256": "5af9d7212f76a900083869a6c0a4c257b8193705da9398a51d27479a48668b0e"
+            }
+          },
+          {
+            "name": "revised-base",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "7969c0dd-8142-45fc-8ddd-b4a45b714c47",
+            "requestDigest": "2506da2e89cd01c9ef5fd628ab7acc84fbeb618f411fb44a81462997facf3c0e",
+            "receipt": {
+              "path": "m4-progress-1/attempts/restricted-LuoSBJ/receipt.json",
+              "sha256": "79b27423a5835c2491977e3402628eadb3eabb3970faf877264664efb44b7ddf"
+            }
+          },
+          {
+            "name": "revised-head",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "f543d95b-4e9f-45e4-93e4-5b0ea1d94bfd",
+            "requestDigest": "a5413cb9ad060b9c452e5dcbd725082b89aba313a63564411c6dc0eb933d5d9c",
+            "receipt": {
+              "path": "m4-progress-1/attempts/restricted-ZBSCXY/receipt.json",
+              "sha256": "272542a3409d74613415eba012dc771958ef8065ab62ef70e773128d38576fd9"
+            }
+          },
+          {
+            "name": "fresh-head-replay",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "f5ae8981-3202-4402-b755-be5c9828d0bf",
+            "requestDigest": "a5413cb9ad060b9c452e5dcbd725082b89aba313a63564411c6dc0eb933d5d9c",
+            "receipt": {
+              "path": "m4-progress-1/attempts/restricted-qvZNDL/receipt.json",
+              "sha256": "41198390b71fd871aa504f1062ebb20eef02163882c8946c487f700d8b3f841b"
+            }
+          },
+          {
+            "name": "repaired",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "f3e7645f-a416-40f2-a994-bcc66b90cfa7",
+            "requestDigest": "b0dea6c6012690db1b4532f9efb9933acfa51a112c7ccfecbc0a41365197ba34",
+            "receipt": {
+              "path": "m4-progress-1/attempts/restricted-flMj57/receipt.json",
+              "sha256": "1b925131a3dd65eb99c47963a501c2eefd571464a459986a69fe1c39fd6efd83"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "thinking",
+      "split": "holdout",
+      "knownDefects": [],
+      "intentionalChange": "Preserve effective coordinator high/xhigh while leaving configured medium worker tiers separate.",
+      "rationale": [
+        "4b1e148bd62d215294d0f8044d1bf5bf334f42aa README.md:36,46",
+        "Head prompts/workflow.md and prompts/session-launch.md; actual preflight/launch observations"
+      ],
+      "falsePositiveRule": "Treating coordinator high/xhigh as a violation of the worker medium policy conflates distinct roles. A genuine selection or launch defect needs adjudication.",
+      "scopeLimit": "Supported-model map and exec are inert boundaries; no live model/provider, full SDK boot or subscription behavior was tested.",
+      "evidence": {
+        "summary": {
+          "path": "m4-thinking-1/summary.json",
+          "sha256": "e9ecaba49918884b8969001f4ac380d9bf2d25d1f55d4163e16036e14a6f2856"
+        },
+        "attempts": [
+          {
+            "name": "base-high",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "d6a4b1ce-2573-4270-a568-336797eb1cd7",
+            "requestDigest": "81ca9267c256046d9f7e4f19d8352f173cb3641923bad85ca76409b8638be30c",
+            "receipt": {
+              "path": "m4-thinking-1/attempts/restricted-YuEZXu/receipt.json",
+              "sha256": "351b6f03c66d31c4cc3ac8eb4f193f5a7ad5522286e4374aef9f795ff4298850"
+            }
+          },
+          {
+            "name": "head-high",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "3788c3e0-51c8-4843-aafe-aa99a6afa8f1",
+            "requestDigest": "5d303df7f98730f40544f2be208a2dec4013820494ff88b5d35e49727304693c",
+            "receipt": {
+              "path": "m4-thinking-1/attempts/restricted-14RVgJ/receipt.json",
+              "sha256": "9fb900ba25a7cada1e94e02b35d10adc679430c7882a6d10be8b3acdb9aab9db"
+            }
+          },
+          {
+            "name": "base-xhigh",
+            "status": "completed",
+            "predicate": "FAIL",
+            "attemptId": "daf808ca-b6a1-4edf-9994-adaf5e8f8a4f",
+            "requestDigest": "5d2512556a625a944cd45696f877abd2779005fc2eac57d03ff952b08cb3f471",
+            "receipt": {
+              "path": "m4-thinking-1/attempts/restricted-5gGZc6/receipt.json",
+              "sha256": "024810a11285d9c5887e44ebf672753d7f2aa00f961d1dc07a4270092ee07b55"
+            }
+          },
+          {
+            "name": "head-xhigh",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "1d709d43-0c5d-4b71-b3b0-08d90f22532c",
+            "requestDigest": "4e69c4f77c986c3e0a7e9c45f7244dfd9c354dcbb271b839e245b24f5a757ff9",
+            "receipt": {
+              "path": "m4-thinking-1/attempts/restricted-tNE3ma/receipt.json",
+              "sha256": "e20604e8ad6e81491cd172716dee8a998e4d07070310afbdac724067e702ec95"
+            }
+          },
+          {
+            "name": "head-unsupported",
+            "status": "completed",
+            "predicate": "PASS",
+            "attemptId": "14b75b74-57d5-4cfb-ad48-797c19e2497e",
+            "requestDigest": "53969d8b001347288be70ca1789f811f59efcab19bcf5bcdf293a177cc7fa3b7",
+            "receipt": {
+              "path": "m4-thinking-1/attempts/restricted-9iK2RN/receipt.json",
+              "sha256": "792d9682d5066fd8f721c1434ed58d645a60d8d5914083e0f4b815906d3066e0"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "control": {
+    "caseId": "restore",
+    "attempt": "missing-dependencies",
+    "expected": "setup_error/UNRESOLVED",
+    "scoredAsReviewCase": false
+  }
+}

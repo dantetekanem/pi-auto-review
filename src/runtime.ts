@@ -10,6 +10,7 @@ export type ReviewIntake = {
 };
 
 export type ReviewThinking = NonNullable<ExtensionContext['thinkingLevel']>;
+export type ReviewSelection = { model?: string; thinking?: ReviewThinking };
 
 export type ReviewPreflight = {
   target: string;
@@ -93,11 +94,29 @@ function supportsThinking(model: ReviewModel, thinking: ReviewThinking): boolean
   return true;
 }
 
-async function modelFor(ctx: ExtensionContext): Promise<{ spec: string; thinking: ReviewThinking }> {
-  const thinking = ctx.thinkingLevel ?? 'medium';
+async function modelFor(ctx: ExtensionContext, selection?: ReviewSelection): Promise<{ spec: string; thinking: ReviewThinking }> {
+  const thinking = selection?.thinking ?? ctx.thinkingLevel ?? 'medium';
+  const registry = ctx.modelRegistry as unknown as {
+    getAvailable?: () => ReviewModel[] | Promise<ReviewModel[]>;
+    find?: (provider: string, id: string) => ReviewModel | undefined;
+  } | undefined;
+
+  if (selection?.model !== undefined) {
+    const slash = selection.model.indexOf('/');
+    const model = slash > 0
+      ? registry?.find?.(selection.model.slice(0, slash), selection.model.slice(slash + 1))
+      : undefined;
+    if (!model) {
+      throw new Error(`Auto-review model ${selection.model} is unavailable or unregistered.`);
+    }
+    if (!supportsThinking(model, thinking)) {
+      throw new Error(`Auto-review model ${selection.model} does not support ${thinking}.`);
+    }
+    return { spec: `${model.provider}/${model.id}`, thinking };
+  }
+
   if (ctx.model && supportsThinking(ctx.model, thinking)) return { spec: `${ctx.model.provider}/${ctx.model.id}`, thinking };
   const scoped = (ctx.scopedModels ?? []).map(item => item.model).filter(model => supportsThinking(model, thinking));
-  const registry = ctx.modelRegistry as unknown as { getAvailable?: () => ReviewModel[] | Promise<ReviewModel[]>; find?: (provider: string, id: string) => ReviewModel | undefined } | undefined;
   const available = registry?.getAvailable ? (await registry.getAvailable()).filter(model => supportsThinking(model, thinking)) : [];
   const candidates = [...scoped, ...available].filter((model, index, all) => all.findIndex(item => item.provider === model.provider && item.id === model.id) === index);
   if (!candidates.length && ctx.hasUI && registry?.find) {
@@ -150,9 +169,16 @@ function priorCheckout(historyRoot: string, repository: string): string | undefi
   return candidates.sort((left, right) => right.time - left.time)[0]?.root;
 }
 
-export async function preflightReview(pi: ExtensionAPI, ctx: ExtensionContext, context: string, historyRoot: string, requestedCheckout?: string): Promise<ReviewPreflight> {
+export async function preflightReview(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  context: string,
+  historyRoot: string,
+  requestedCheckout?: string,
+  selection?: ReviewSelection,
+): Promise<ReviewPreflight> {
   const started = Date.now();
-  const selected = await modelFor(ctx);
+  const selected = await modelFor(ctx, selection);
   const meteorite = context.match(/https?:\/\/(?:meteorite|gitstream)\.shopify\.io\/repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)/i);
   if (meteorite) {
     const number = Number(meteorite[3]);

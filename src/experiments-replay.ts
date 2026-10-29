@@ -106,7 +106,7 @@ async function pinnedCopies(request: ReplayRequest, signal?: AbortSignal) {
   return copies;
 }
 
-function observationFrom(execution: Execution, request: ReplayRequest): Outcome {
+export function observationFrom(execution: Execution, request: ReplayRequest): Outcome {
   const outcome = (status: FixtureStatus, observation: FixtureObservation | null, detail = ''): Outcome => ({ status, observation, detail });
   if (execution.status !== 'completed') return outcome(execution.status, null, execution.detail);
   const lines = Buffer.concat(execution.streams.stdout.chunks).toString('utf8').split(/\r?\n/);

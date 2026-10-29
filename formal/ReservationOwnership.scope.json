@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "kind": "model-only",
+  "property": "NoUnjustifiedReacquisition",
+  "module": "ReservationOwnership",
+  "source": "src/experiments-reservations.ts",
+  "sourceSha256": "d53bd457bf542aa5d211f1070d9a44ee1577f8d51bef342a1db20b646bf2fba8",
+  "bounds": {
+    "keys": 2,
+    "callers": 2,
+    "tokensPerKey": 3,
+    "clockValues": [0, 1, 2, 3],
+    "deadlines": [1, 2]
+  },
+  "assumptions": [
+    "One reservation-instance lifetime; two already established exact keys; six grants maximum; one foreign token; old tokens remain addressable.",
+    "Fresh opaque token identities and fresh nonempty successful attempt IDs per key are represented by monotonic integers 1..3; callers supply attempt freshness, which the class does not enforce.",
+    "Two callers may share token aliases; caller identity confers no authority. Successful completion IDs are abstracted to the issuing token number; all invalid IDs form one failure outcome.",
+    "Clock is total, pure, non-reentrant and returns finite safe integers; mathematical integers model only the frozen values. Clock moves may go backward.",
+    "Ordinary native Map/WeakMap, sufficient memory, immutable token identity and no direct mutation of fields or reservation records are assumed.",
+    "Synchronous direct calls on one JavaScript agent are atomic; no method replacement, subclass overrides, hostile accessors, reentrant callbacks or concurrent shared instance.",
+    "Result objects are ordinary plain data. Failed settlement consumes its token and fences before returning failure; late, unconfirmed and invalid-ID outcomes cannot settle successfully.",
+    "Rejecting foreign/stale/duplicate token operations and invalid reserve inputs may stutter without logs; explicit fence, successful settlement and failed settlement remain separate operations.",
+    "History records successful grants and terminal token outcomes per key independently of admission slots; caller-neutral terminal events use c1 as a canonical label.",
+    "Host independently retains execution authority. cleanupConfirmed is an input label, not verified cleanup. No await occurs within a modeled operation.",
+    "Mutation is a model-only sensitivity control: none is baseline; allow-active bypasses active/fenced admission; ignore-replay bypasses replay matching. Replay matching for an unsettled predecessor accepts only the absent label, with admission normally rejecting it.",
+    "TLC finite-state exploration, its implementation, fingerprinting and the handwritten abstraction are trusted; no refinement relation or TypeScript semantics frontend is supplied."
+  ],
+  "exclusions": [
+    "TypeScript proof, code-linked proof, refinement, all JavaScript numeric values, NaN, coercion, floating-point arithmetic and throwing clocks.",
+    "Key canonicalization, hashing, collision resistance, run-ID omission and proof that distinct requests have distinct keys.",
+    "OOM, native collection failures, GC/recovery or lost-token liveness, hostile object behavior and externally mutated instance state.",
+    "Actual dispatch, container/workspace deletion, grant accounting, receipts, durable claimed files, process cancellation, worker isolation and real cleanup.",
+    "Cross-process ownership, restart recovery, automatic retry, fairness, liveness, unbounded attempts or bounds beyond the frozen domains.",
+    "Symmetry reduction, state constraints, recovery, simulation and trace-depth sampling; no such exploration shortcuts are configured."
+  ]
+}

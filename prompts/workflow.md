@@ -47,6 +47,8 @@ Judge durability against the project's actual responsibilities and plausible nex
 
 The grouped report supplies each lane's findings, production/future assessments, proof results and unfinished list. A partial, blocked, failed or stopped lane leaves its exact items to the top-level session. Finish them directly using the named evidence, with no replacement agent. A read budget limits a helper, not overall review depth. Record targeted expansions and their reason. No broad searches or second full scan. Source access or intent needing a decision-changing user answer gets one focused `ask_user`; resume from the answer.
 
+For an explicitly selected adaptive review, use `agentic_code_review_next_action` to record named missing facts from saved structured scan/search results or indexed experiment receipts, then select a bounded next action. Keep the initial scan and this one reviewer batch. Submit coarse results with their original context/action keys; never emit an event per generated trial, reset a budget or retry a pending action. The tool recommends work but grants no execution authority. Fixed reconciliation remains the default while the adaptive comparison is unmeasured.
+
 For each criterion, reconcile requirement → expected behavior → implementation → proof → consumer impact → remaining maintenance/connection risk. Resolve disagreements with evidence, not voting. Every question becomes an author question or a settled line with its answer and evidence. Every dangling definition becomes a settled line or a finding. Keep material unknowns explicit; completion does not require pretending they were proven.
 
 ## Synthesize, learn and hand off

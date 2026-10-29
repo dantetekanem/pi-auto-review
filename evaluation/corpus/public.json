@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "m4-history-v1",
+  "purpose": "Four scoped historical review cases for a wiring comparison, not a representative quality benchmark.",
+  "cases": [
+    {
+      "id": "restore",
+      "repository": "https://github.com/dantetekanem/pi-auto-review",
+      "base": "1a5c8759004bbec52d5cde6e7556e65212053b70",
+      "head": "d6b892a2e84b7895d4047ecfa392691d263b12d0",
+      "scope": ["src/index.ts", "src/runtime.ts", "test/review.test.mjs"],
+      "request": "Review visible review sessions, saved completion and restoration behavior.",
+      "criteria": [
+        { "id": "one-handoff", "statement": "A previously delivered completion must not be delivered again when its completed review is restored under a supported SDK." }
+      ]
+    },
+    {
+      "id": "dispatch",
+      "repository": "https://github.com/dantetekanem/pi-auto-review",
+      "base": "b4fdb8e76b3777afa50b900d49fb3f51eb392cf7",
+      "head": "c21a3ec1d62c497d7dfeca1b6ee867a6adb3d1ab",
+      "scope": ["src/index.ts", "src/runtime.ts", "prompts/workflow.md", "prompts/session-launch.md"],
+      "request": "Move review worker dispatch back to the configured team batch; preserve bounded one-batch completion and ownership of partial-lane work.",
+      "criteria": [
+        { "id": "configured-dispatch", "statement": "Raw unconfigured wave dispatch is intentionally replaced by the configured team tools and one all-settled batch. Review whether the replacement meets that contract." }
+      ]
+    },
+    {
+      "id": "progress",
+      "repository": "https://github.com/dantetekanem/pi-extended-teams",
+      "base": "632e181de1b95e0f8564946dde98005ae981d801",
+      "head": "5366abb784e11fb9c1f2a9dc641fb1ff31d4c270",
+      "scope": ["extensions/index.ts", "extensions/ui/status-widget.ts", "extensions/ui/activity-colors.ts", "extensions/ui/renderers.ts"],
+      "request": "Review helper report finalization and pending-cleanup status updates, including how final progress is displayed.",
+      "criteria": [
+        { "id": "stable-final-progress", "statement": "An unchanged final progress message remains readable across status refreshes while matching cleanup is pending." }
+      ]
+    },
+    {
+      "id": "thinking",
+      "repository": "https://github.com/dantetekanem/pi-auto-review",
+      "base": "e42b414f08b21043acafcf025d28748f80ab70fc",
+      "head": "4b1e148bd62d215294d0f8044d1bf5bf334f42aa",
+      "scope": ["src/runtime.ts", "src/index.ts", "README.md", "prompts/session-launch.md", "prompts/workflow.md"],
+      "request": "Review preservation of the invoking session's supported thinking level. Worker-tier configuration remains separate; external completion subscriptions are outside this case's scored scope.",
+      "criteria": [
+        { "id": "caller-thinking", "statement": "The coordinator preserves supported effective high/xhigh thinking and does not silently downgrade unsupported requests. Configured worker tiers are unchanged." }
+      ]
+    }
+  ]
+}
