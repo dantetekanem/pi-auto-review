@@ -52,6 +52,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
   const modelChanges = [];
   const thinkingChanges = [];
   const eventHandlers = new Map();
+  const nativeEntries = [];
   const behavior = {
     confirm: true,
     input: undefined,
@@ -70,7 +71,11 @@ function createReviewFixture(t, sessionId = 'session-1') {
 
   const pi = {
     __disableAutoReviewWatchdog: true,
-    on: (event, handler) => eventHandlers.set(event, handler),
+    on(event, handler) {
+      const previous = eventHandlers.get(event);
+      eventHandlers.set(event, (...args) => Promise.all([previous?.(...args), handler(...args)]));
+    },
+    appendEntry: (customType, data) => nativeEntries.push({ id: `native-${nativeEntries.length}`, type: 'custom', customType, data }),
     registerCommand: (name, definition) => commands.set(name, definition),
     registerTool: definition => tools.set(definition.name, definition),
     sendMessage: (message, options) => messages.push({ message, options }),
@@ -100,7 +105,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
     },
     sessionManager: {
       getSessionId: () => sessionId,
-      getEntries: () => messages.map(item => ({ type: 'custom_message', customType: item.message.customType, content: item.message.content, details: item.message.details, display: item.message.display ?? false })),
+      getEntries: () => [...messages.map(item => ({ type: 'custom_message', customType: item.message.customType, content: item.message.content, details: item.message.details, display: item.message.display ?? false })), ...nativeEntries],
     },
     ui: {
       notify: (...args) => notices.push(args),
@@ -123,7 +128,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
   });
 
   return {
-    dir, storage, cwd, pi, commands, tools, messages, userMessages, notices, confirmations, execCalls, modelChanges, thinkingChanges, eventHandlers, behavior, ctx,
+    dir, storage, cwd, pi, commands, tools, messages, userMessages, notices, confirmations, execCalls, modelChanges, thinkingChanges, eventHandlers, nativeEntries, behavior, ctx,
     command: context => commands.get('code-review').handler(context, ctx),
     tool: (context = '', signal, options = {}) => tools.get('agentic_code_review').execute('call-1', { context, ...options }, signal, undefined, ctx),
     complete: input => tools.get('agentic_code_review_complete').execute('complete-1', input, undefined, undefined, ctx),
@@ -150,6 +155,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_append_finding',
     'agentic_code_review_complete',
     'agentic_code_review_execute_experiment',
+    'agentic_code_review_export_telemetry',
     'agentic_code_review_next_action',
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
@@ -421,14 +427,30 @@ test('slash command preflights, sets this session to medium and runs the mission
   assert.match(readFileSync(paths.mission, 'utf8'), /visible top-level review session/);
   assert.match(readFileSync(paths.pr, 'utf8'), /GitHub change/);
 
+  await harness.tools.get('agentic_code_review_subscribe').execute('subscribe', {
+    reviewSessionId: sessionId, runId, expectedTarget: review.preflight.target, expectedHead: review.preflight.head,
+  }, undefined, undefined, { sessionManager: { getSessionId: () => 'waiting-session', getSessionFile: () => '/tmp/waiting-session.jsonl' } });
+  harness.nativeEntries.push({ id: 'before-mission', type: 'message', message: {
+    role: 'assistant', provider: 'test', model: 'earlier-turn', usage: { cost: { total: 9 } },
+  } });
+  await harness.eventHandlers.get('before_agent_start')({ prompt: harness.userMessages[0].message }, harness.ctx);
+  harness.nativeEntries.push({ id: 'observed-review-response', type: 'message', message: {
+    role: 'assistant', provider: 'test', model: 'observed-model', usage: { cost: { total: 0.2 } },
+  } });
   writeFileSync(paths.review, JSON.stringify({ ...review, status: 'complete', completedAt: '2026-09-15T00:00:00Z', findings: [], commentDrafts: [] }));
   const completion = await harness.complete({ sessionId, runId, summary: 'Clean change.' });
   assert.equal(completion.terminate, true);
+  assert.equal(completion.details.telemetry.cost.totalUsd, 0.2);
+  assert.equal(completion.details.telemetry.models[0].model, 'observed-model');
+  assert.deepEqual(readJson(paths.review).telemetry, completion.details.telemetry);
   await settleWatcher();
   const handoffs = harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete');
   assert.equal(handoffs.length, 1);
   assert.equal(handoffs[0].options.triggerTurn, true);
   assert.equal(handoffs[0].message.details.runId, runId);
+  assert.deepEqual(handoffs[0].message.details.telemetry, completion.details.telemetry);
+  const external = harness.messages.find(item => item.message.customType === 'agentic-code-review-subscription');
+  assert.deepEqual(external.message.details.telemetry, completion.details.telemetry);
 });
 
 test('slash command switches this session to the preflighted medium model and reports a failed switch', async t => {

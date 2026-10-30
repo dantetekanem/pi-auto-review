@@ -26,6 +26,7 @@ import { registerCodebaseLearning } from './codebase.ts';
 import { readCompletionEvidence } from './evidence-completion.ts';
 import { readMachineEvidence } from './evidence-receipts.ts';
 import { registerReviewSubscription } from './review-subscription.ts';
+import { registerTelemetry } from './telemetry.ts';
 import {
   completionFileName,
   formatPreflight,
@@ -159,6 +160,7 @@ function prepareReview(
       } : null,
       learning: null,
       timing: null,
+      telemetry: null,
     }],
   ];
 
@@ -228,7 +230,7 @@ function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>
     pi.sendMessage({
       customType: 'agentic-code-review-complete',
       content: `Review session ${reviewSession.name} finished (${String(marker.status ?? 'unknown')}). Read ${paths.review}, ${paths.bugs} and the relevant records in ${paths.map}, then present the review under the saved presentation and voice prompts. The review's draft summary was: ${String(marker.summary ?? '').slice(0, 5000)}`,
-      details: { runId, paths, reviewSession, marker },
+      details: { runId, paths, reviewSession, marker, telemetry: JSON.parse(readFileSync(paths.review, 'utf8')).telemetry ?? null },
       display: true,
     }, { triggerTurn: true, deliverAs: 'followUp' });
   };
@@ -330,6 +332,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   registerAdaptive(pi, root, availableFamilies);
   registerCodebaseLearning(pi, root);
   registerReviewSubscription(pi, root, readPrompt('review-subscribe'));
+  const telemetry = registerTelemetry(pi, root);
 
   pi.registerTool({
     name: 'agentic_code_review_read_prompt',
@@ -355,7 +358,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       runId: Type.String(),
       summary: Type.String({ minLength: 1, maxLength: 5000 }),
     }),
-    async execute(_id, { sessionId, runId, summary }, signal) {
+    async execute(_id, { sessionId, runId, summary }, signal, _update, ctx) {
       signal?.throwIfAborted();
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) throw new Error('Invalid review completion identity.');
       const reviewPath = join(root, sessionId, `${runId}.review.json`);
@@ -367,7 +370,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       }
       const finalReview = review as { findings?: unknown; commentDrafts?: unknown; executionReceipts?: unknown;
         evidenceGraph?: unknown; evidenceContext?: unknown; evidenceAssessment?: unknown;
-        machineClaims?: unknown; machineAssessment?: unknown };
+        machineClaims?: unknown; machineAssessment?: unknown; telemetry?: unknown };
       const findings = Array.isArray(finalReview.findings) ? finalReview.findings : [];
       const drafts = Array.isArray(finalReview.commentDrafts) ? finalReview.commentDrafts : [];
       const acceptedIds = findings.filter(item => item && typeof item === 'object' && (item as { state?: unknown }).state === 'accepted').map(item => (item as { id?: unknown }).id).filter((id): id is string => typeof id === 'string');
@@ -389,12 +392,12 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       if (!machine && finalReview.machineAssessment !== undefined) throw new Error('A machine assessment requires its receipt-linked claims.');
       if (evidence) finalReview.evidenceAssessment = evidence;
       if (machine) finalReview.machineAssessment = machine;
-      if (evidence || machine || receipts.length || finalReview.executionReceipts !== undefined) {
-        finalReview.executionReceipts = receipts;
-        const tempReview = `${reviewPath}.${randomUUID()}.tmp`;
-        writeFileSync(tempReview, JSON.stringify(review) + '\n', { flag: 'wx', mode: 0o600 });
-        renameSync(tempReview, reviewPath);
-      }
+      if (evidence || machine || receipts.length || finalReview.executionReceipts !== undefined) finalReview.executionReceipts = receipts;
+      const report = telemetry.finish(ctx, sessionId, runId);
+      finalReview.telemetry = report;
+      const tempReview = `${reviewPath}.${randomUUID()}.tmp`;
+      writeFileSync(tempReview, JSON.stringify(review) + '\n', { flag: 'wx', mode: 0o600 });
+      renameSync(tempReview, reviewPath);
       const marker = { sessionId, runId, status: (review as { status: string }).status, completedAt: (review as { completedAt: string }).completedAt, summary };
       const encoded = `${JSON.stringify(marker)}\n`;
       if (existsSync(completePath)) {
@@ -405,7 +408,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         try { writeFileSync(fd, encoded); } finally { closeSync(fd); }
         renameSync(temp, completePath);
       }
-      return { content: [{ type: 'text' as const, text: summary }], details: marker, terminate: true };
+      return { content: [{ type: 'text' as const, text: summary }], details: { ...marker, telemetry: report }, terminate: true };
     },
   });
 

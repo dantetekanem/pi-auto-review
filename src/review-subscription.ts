@@ -31,6 +31,7 @@ type PreparedReview = {
   runId: unknown;
   status: string;
   completedAt?: unknown;
+  telemetry?: unknown;
   preflight?: { target?: unknown; head?: unknown };
 };
 
@@ -138,7 +139,7 @@ function handoffPrompt(name: 'ended' | 'complete', values: Record<string, string
   );
 }
 
-function notice(pi: ExtensionAPI, subscription: Subscription, text: string): void {
+function notice(pi: ExtensionAPI, subscription: Subscription, text: string, telemetry: unknown = null): void {
   pi.sendMessage(
     {
       customType: 'agentic-code-review-subscription',
@@ -148,6 +149,7 @@ function notice(pi: ExtensionAPI, subscription: Subscription, text: string): voi
         reviewSessionId: subscription.reviewSessionId,
         paths: subscription.paths,
         deadline: subscription.deadline,
+        telemetry,
       },
       display: true,
     },
@@ -162,12 +164,12 @@ function terminal(pi: ExtensionAPI, subscription: Subscription, reason: string):
   notice(pi, subscription, handoffPrompt('ended', { runId: subscription.runId, reason }));
 }
 
-function deliver(pi: ExtensionAPI, subscription: Subscription, marker: CompleteMarker): void {
+function deliver(pi: ExtensionAPI, subscription: Subscription, marker: CompleteMarker, telemetry: unknown): void {
   if (subscription.status !== 'waiting') return;
   subscription.status = 'delivered';
   close(subscription);
   const summary = typeof marker.summary === 'string' ? marker.summary.slice(0, 5000) : '';
-  notice(pi, subscription, handoffPrompt('complete', { runId: subscription.runId, ...subscription.paths, summary }));
+  notice(pi, subscription, handoffPrompt('complete', { runId: subscription.runId, ...subscription.paths, summary }), telemetry);
 }
 
 function reconcile(pi: ExtensionAPI, subscription: Subscription, expectedTarget: string, expectedHead: string): void {
@@ -215,7 +217,7 @@ function reconcile(pi: ExtensionAPI, subscription: Subscription, expectedTarget:
     terminal(pi, subscription, 'the completion marker does not match the completed review identity');
     return;
   }
-  deliver(pi, subscription, marker);
+  deliver(pi, subscription, marker, review.telemetry ?? null);
 }
 
 function probeReply(subscription: Subscription): {
