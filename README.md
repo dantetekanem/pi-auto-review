@@ -4,6 +4,15 @@ An experiment in automatic, evidence-backed code review for [Pi](https://pi.dev)
 Independent agents collect context, trace connected behavior, and review the change.
 The final report explains what it does, how it works, and where it falls short.
 
+## What's new in 0.7.0
+
+- Per-run coordinator model/thinking selection and a completion handoff that does not pause previously authorized work.
+- [Evidence support and receipt verification](docs/evidence.md), explicit replay protection and [host-approved two-worker batches](docs/workers.md).
+- [Adaptive retrieval recommendations](docs/adaptive.md) with frozen budgets. They do not launch work or grant execution permission.
+- [Historical cases and benchmark tooling](docs/evaluation.md), plus a host-only finite reservation-model checker. The checker is not a TypeScript proof.
+
+Source-only reviews and the fixed one-batch workflow remain the defaults. In the eight-review pilot, both variants found 2/2 known defects; no known-defect recall gain was observed. Full production-policy, adaptive, parallel and formal-assisted comparisons remain unfinished.
+
 ## Why this exists
 
 A clean diff and a confident model can still hide a wrong assumption.
@@ -36,6 +45,16 @@ Both entry points run the same mission. They differ only in where it runs.
 `/code-review` preflights the target, exact range, active model and its effective thinking level, writes the run artifacts, then runs the review in the current Pi session. It preserves that level when the selected model supports it. If a medium review needs another model, preflight can choose a medium-capable model; high and xhigh never fall back to medium. The command sets this session to the preflighted model and thinking level, sends the mission as a user message and does not open a pane or ask for confirmation. When the review completes, the same session receives the handoff and presents the report.
 
 Agents call `agentic_code_review` with plain-text context. That tool runs the same preflight, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one pi-extended-teams batch, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane. The tool also accepts optional per-run `model` (`provider/model`) and `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`) arguments; omitted fields follow the existing selection/inheritance behavior, and explicit values are validated before artifacts or launch.
+
+For example, select a coordinator without changing the invoking session or its worker tiers:
+
+```js
+agentic_code_review({
+  context: "Review the current changes.",
+  model: "openai-codex/gpt-6.1-sol",
+  thinking: "xhigh"
+})
+```
 
 When a review already runs in another Pi session, `agentic_code_review_subscribe` can register one bounded handoff using the exact review session ID, run ID, expected target, and expected head. It validates those saved artifacts but does not prove this session launched the review or that the caller's relevance decision is correct. Same-session `/code-review` runs keep their native watcher. Missing, malformed, failed, or timed-out artifacts send a failure handoff, not a review result.
 

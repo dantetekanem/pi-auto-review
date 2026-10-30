@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 (2026-10-30)
+
+### Added
+
+- Optional evidence support graphs, recorded-identity freshness and receipt-linked execution observations. Completion verifies indexed receipt and output identities; fresh support is not proof of correctness.
+- Budgeted adaptive retrieval recommendations and host-approved restricted batches with up to two isolated workers. The default review workflow stays fixed, and recommendations grant no execution authority.
+- Four historical replay cases, an independent-judgment scorer and a bounded recorded-evidence benchmark runner. Both pilot variants found 2/2 known defects; full policy comparisons remain unfinished.
+- A pinned, host-only TLC adapter for a finite reservation-ownership model. Results are model-only, not TypeScript correctness proofs.
+- Per-run `model` and `thinking` options for `agentic_code_review`, validated before launch without changing caller settings or configured worker tiers.
+
+### Changed
+
+- Duplicate experiments are rejected. A fresh replay must identify the latest settled attempt with `replayOf` and still consumes the existing execution budget.
+
+### Fixed
+
+- Completing a review no longer forces a feedback-menu pause in the calling session. Previously authorized work continues; posting, merging and publication still require their own authorization.
+
 ## 0.6.0 (2026-10-27)
 
 ### Added
