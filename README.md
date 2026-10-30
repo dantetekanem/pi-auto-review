@@ -179,12 +179,31 @@ Entries link to their review, revision, and sources. Later runs revalidate the c
 For a requested re-review, the review session links the earlier assessment and reviews the fix plus affected boundaries.
 It reuses revalidated evidence and reports prior findings' outcomes. Stage and total timing are recorded for optimization, never used to stop or downgrade the review.
 
+## Portable review telemetry
+
+Each review exposes a versioned `telemetry` object in its completion tool result, completion handoff and existing `.review.json`. Capture starts before the mission's first model call. It includes coordinator and settled native-team usage, observed models, per-agent and per-model costs and tokens, and elapsed milliseconds. Review time starts at preparation and ends at completion; overlapping agent times are not added together. Later presentation turns are excluded.
+
+Get JSON directly, without opening a log file:
+
+```js
+agentic_code_review_export_telemetry({}) // All retained telemetry reports.
+agentic_code_review_export_telemetry({ sessionId: "session-id", runId: "review-run-id" })
+```
+
+The result's text is JSON; `details` contains the same `{ schemaVersion, exportedAt, reviews, summary, unavailableReviews }` object. The existing review artifacts retain reports across sessions. Historical reviews without telemetry are counted in `unavailableReviews`, not reconstructed from guesses. No separate database or remote upload is configured.
+
+- `cost.knownUsd` is the recorded subtotal. `cost.totalUsd` is null when the recorded total is incomplete. Costs are Pi-recorded estimates, not invoices; `billedUsd` stays null.
+- `agents`, `models` and `unattributed` separate native agent usage, observed model identities and auxiliary usage whose model Pi did not record. Configured tiers are not evidence of the model used. External harnesses, legacy receipts, excluded agents and missing usage leave explicit gaps.
+- `summary.averageCostPerReviewUsd` averages distinct telemetry-bearing reviews only when their costs are complete. Otherwise it is null; `averageKnownReviewCostUsd`, `costSampleCount` and `incompleteCostReviews` describe the available sample. `summarizeReviewTelemetry` in `src/telemetry-report.ts` combines exports, keeping the newest record for each `(sessionId, runId)`.
+- In-process consumers can subscribe to `pi.events.on('pi-auto-review:telemetry', report => ...)`. A late child receipt updates the same review identity. Store updates by `(sessionId, runId)`, using `capturedAt` to ignore older copies. Export can recover the latest saved report if an event was missed.
+
+Generated telemetry excludes prompts, source, tool arguments/results and credentials. It is not a signed accounting ledger. Missing model attribution, unrecorded provider activity and unfinished reviews remain visible; recorded assistant responses are not an exact request count. Telemetry adds no request, spending or elapsed-time limit and never uploads data by itself.
+
 ## Experimental limits
 
 This is prompt-directed behavior, not a deterministic reviewer or a sandbox.
 Workers and tools can fail internally; the top-level session finishes their required work before handing the completed review back. Missing evidence remains explicit. Merge/deployment grades authorize neither action.
 The workflow forbids source edits, automatic retries, installs, publication, merges, and deployments.
-Telemetry capture is currently disabled.
 It does not train model weights or run an endless self-review loop.
 
 See the [workflow](prompts/workflow.md), [evidence contract](prompts/artifacts.md),

@@ -1,306 +1,277 @@
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+import { buildReviewTelemetry, object, receiptIdentity, summarizeReviewTelemetry, type ReviewTelemetry } from './telemetry-report.ts';
 
-const isIdentity = (value: unknown): value is string =>
-  typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-const nonnegativeMetric = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-
-type TelemetryFields = Record<string, unknown>;
-type ModelRequest = {
-  id: number;
-  started: number;
-  firstDelta?: number;
-  firstText?: number;
-  stage: number | null;
-  model: string | null;
-};
-type ReviewBinding = {
+const BOUNDARY = 'pi-auto-review-telemetry-v1';
+const CHILD_COST = 'pi-extended-teams-cost-v1';
+const isIdentity = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+type Context = Pick<ExtensionContext, 'sessionManager'>;
+type Binding = {
   sessionId: string;
   runId: string;
-  agentSessionId: string;
-  path: string;
+  coordinatorSessionId: string;
+  startedAt: number;
+  completedAt: number | null;
+  startEntryId: string;
+  endEntryId?: string;
+  last?: ReviewTelemetry;
 };
-type StepSpan = {
-  stage: number;
-  started: number;
-};
-type ToolSpan = {
-  started: number;
-  stage: number | null;
-  name: string;
+const keyOf = (sessionId: string, runId: string) => JSON.stringify([sessionId, runId]);
+const recordedTime = (value: unknown) => {
+  const timestamp = Date.parse(String(value));
+  return Number.isFinite(timestamp) ? timestamp : null;
 };
 
-// One extension instance writes one stream; the top-level review session never rewrites it.
-export function registerTelemetry(pi: ExtensionAPI, root: string, now = () => performance.now()): void {
-  let binding: ReviewBinding | undefined;
-  let activeStep: StepSpan | undefined;
-  let activeRequest: ModelRequest | undefined;
-  let eventSequence = 0;
-  let requestSequence = 0;
-  let persistenceFailed = false;
-  const activeTools = new Map<string, ToolSpan>();
+export function registerTelemetry(pi: ExtensionAPI, root: string, now = Date.now) {
+  const bindings = new Map<string, Binding>();
+  let context: Context | undefined;
+  let unsubscribe: (() => void) | undefined;
 
-  const emit = (kind: string, fields: TelemetryFields = {}) => {
-    if (!binding || persistenceFailed) return;
-    try {
-      const record = {
-        schemaVersion: 1,
-        sessionId: binding.sessionId,
-        runId: binding.runId,
-        agentSessionId: binding.agentSessionId,
-        sequence: ++eventSequence,
-        at: new Date().toISOString(),
-        stage: activeStep?.stage ?? null,
-        kind,
-        ...fields,
-      };
-      appendFileSync(binding.path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    } catch {
-      persistenceFailed = true;
+  const reviewPath = (sessionId: string, runId: string) => {
+    if (!isIdentity(sessionId) || !isIdentity(runId)) throw new Error('Invalid telemetry identity.');
+    const directory = join(root, sessionId);
+    const path = join(directory, `${runId}.review.json`);
+    if (!lstatSync(root).isDirectory() || !lstatSync(directory).isDirectory() || !lstatSync(path).isFile()) {
+      throw new Error('Review telemetry requires regular review artifacts.');
+    }
+    return path;
+  };
+  const readReview = (sessionId: string, runId: string) => {
+    const review = object(JSON.parse(readFileSync(reviewPath(sessionId, runId), 'utf8')));
+    if (review.sessionId !== sessionId || review.runId !== runId) throw new Error('Review telemetry identity mismatch.');
+    return review;
+  };
+  const entriesFor = (ctx: Context): Record<string, unknown>[] => ctx.sessionManager.getEntries().map(object);
+  const snapshot = (ctx: Context, binding: Binding) => {
+    const entries = entriesFor(ctx);
+    const start = entries.findIndex(entry => entry.id === binding.startEntryId);
+    const end = binding.endEntryId ? entries.findIndex(entry => entry.id === binding.endEntryId) : entries.length;
+    const available = start >= 0 && end > start;
+    const own = available ? entries.slice(start + 1, end) : [];
+    const admitted = new Set(own
+      .filter(entry => entry.type === 'custom' && entry.customType === CHILD_COST)
+      .map(entry => object(entry.data))
+      .filter(receipt => receipt.phase === 'pending')
+      .flatMap(receipt => {
+        const id = receiptIdentity(receipt);
+        return id ? [id] : [];
+      }));
+    const isAdmitted = (receipt: unknown) => {
+      const id = receiptIdentity(receipt);
+      return id !== null && admitted.has(id);
+    };
+    const receipts = entries.filter(entry => entry.type === 'custom' && entry.customType === CHILD_COST)
+      .map(entry => object(entry.data)).filter(receipt => receipt.rootSessionId === binding.coordinatorSessionId);
+    // A helper may settle after completion; follow its recorded parent, not the whole-session subtotal.
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      const parents = new Set(receipts.filter(isAdmitted).map(receipt => receipt.lifecycleRunId));
+      for (const receipt of receipts) {
+        const id = receiptIdentity(receipt);
+        if (id && !admitted.has(id) && parents.has(object(receipt.telemetry).parentLifecycleRunId)) {
+          admitted.add(id);
+          expanded = true;
+        }
+      }
+    }
+    return buildReviewTelemetry({
+      ...binding,
+      capturedAt: now(),
+      entries: own,
+      children: receipts.filter(isAdmitted),
+      rootAvailable: available,
+    });
+  };
+  const emit = (report: ReviewTelemetry) => {
+    try { pi.events?.emit('pi-auto-review:telemetry', report); }
+    catch { /* An observer cannot interrupt a review or native child settlement. */ }
+  };
+  const publish = (ctx: Context, binding: Binding) => {
+    const report = snapshot(ctx, binding);
+    const signature = (value: ReviewTelemetry) => JSON.stringify({ ...value, capturedAt: undefined });
+    if (binding.last && signature(binding.last) === signature(report)) return binding.last;
+    const review = readReview(binding.sessionId, binding.runId);
+    if (binding.completedAt !== null || review.status !== 'complete') {
+      const path = reviewPath(binding.sessionId, binding.runId);
+      const temp = `${path}.${randomUUID()}.tmp`;
+      writeFileSync(temp, `${JSON.stringify({ ...review, telemetry: report })}\n`, { flag: 'wx', mode: 0o600 });
+      renameSync(temp, path);
+    }
+    binding.last = report;
+    emit(report);
+    return report;
+  };
+  const refresh = () => {
+    if (!context) return;
+    for (const binding of bindings.values()) {
+      if (binding.coordinatorSessionId !== context.sessionManager.getSessionId()) continue;
+      try {
+        publish(context, binding);
+      } catch {
+        // Export can retry; measurement must not stop a review or cleanup.
+      }
     }
   };
-  const checkPersistence = () => {
-    if (persistenceFailed) {
-      throw new Error('Review telemetry could not persist; report this coverage gap.');
-    }
+  const listen = () => {
+    unsubscribe?.();
+    unsubscribe = pi.events?.on('pi-extended-teams:cost-changed', refresh);
   };
-  const elapsed = (start: number) => Math.max(0, now() - start);
-  const observesSession = (ctx: { sessionManager: { getSessionId(): string } }) =>
-    binding?.agentSessionId === ctx.sessionManager.getSessionId();
+  const recover = (ctx: Context) => {
+    context = ctx;
+    bindings.clear();
+    for (const entry of entriesFor(ctx)) {
+      if (entry.type !== 'custom' || entry.customType !== BOUNDARY || typeof entry.id !== 'string') continue;
+      const data = object(entry.data);
+      if (!isIdentity(data.sessionId) || !isIdentity(data.runId) || typeof data.startedAt !== 'number') continue;
+      const key = keyOf(data.sessionId, data.runId);
+      if (data.phase === 'start') {
+        bindings.set(key, {
+          sessionId: data.sessionId,
+          runId: data.runId,
+          startedAt: data.startedAt,
+          completedAt: null,
+          coordinatorSessionId: ctx.sessionManager.getSessionId(),
+          startEntryId: entry.id,
+        });
+      }
+      const binding = bindings.get(key);
+      if (data.phase === 'end' && binding && binding.completedAt === null && typeof data.completedAt === 'number') {
+        binding.endEntryId = entry.id;
+        binding.completedAt = data.completedAt;
+      }
+    }
+    listen();
+  };
+  const appendBoundary = (ctx: Context, data: Record<string, unknown>) => {
+    pi.appendEntry(BOUNDARY, data);
+    const entry = entriesFor(ctx).at(-1);
+    if (entry?.customType !== BOUNDARY || typeof entry.id !== 'string') throw new Error('Telemetry boundary was not journaled.');
+    return entry.id;
+  };
+  const start = (ctx: Context, sessionId: string, runId: string) => {
+    if (context?.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) recover(ctx);
+    const key = keyOf(sessionId, runId);
+    if (bindings.has(key)) return;
+    const review = readReview(sessionId, runId);
+    if (!['prepared', 'running'].includes(String(review.status))) return;
+    const createdAt = Date.parse(String(review.createdAt));
+    const startedAt = Number.isFinite(createdAt) ? createdAt : now();
+    const startEntryId = appendBoundary(ctx, { sessionId, runId, phase: 'start', startedAt });
+    bindings.set(key, {
+      sessionId,
+      runId,
+      coordinatorSessionId: ctx.sessionManager.getSessionId(),
+      startedAt,
+      completedAt: null,
+      startEntryId,
+    });
+  };
+  const finish = (ctx: Context | undefined, sessionId: string, runId: string): ReviewTelemetry => {
+    if (ctx && context?.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) recover(ctx);
+    const binding = bindings.get(keyOf(sessionId, runId));
+    if (!binding || !ctx) {
+      const review = readReview(sessionId, runId);
+      return buildReviewTelemetry({
+        sessionId,
+        runId,
+        coordinatorSessionId: null,
+        startedAt: recordedTime(review.createdAt),
+        completedAt: now(),
+        capturedAt: now(),
+        entries: [],
+        children: [],
+        rootAvailable: false,
+      });
+    }
+    if (binding.completedAt === null) {
+      const completedAt = now();
+      binding.endEntryId = appendBoundary(ctx, { sessionId, runId, phase: 'end', startedAt: binding.startedAt, completedAt });
+      binding.completedAt = completedAt;
+    }
+    const report = snapshot(ctx, binding);
+    binding.last = report;
+    emit(report);
+    return report;
+  };
+
+  pi.on('before_agent_start', (event, ctx) => {
+    const match = /^(?:Read the complete|Resume the) auto-review mission at (.+\.mission\.md)(?: and execute it now\.|\. Finish every required item)/s.exec(event.prompt);
+    if (!match) return;
+    const parts = relative(resolve(root), resolve(match[1])).split(/[\\/]/);
+    if (parts.length !== 2 || !parts[1].endsWith('.mission.md')) return;
+    try { start(ctx, parts[0], parts[1].slice(0, -'.mission.md'.length)); }
+    catch { /* Completion will report unavailable coordinator coverage. */ }
+  });
+  pi.on('session_start', (_event, ctx) => {
+    recover(ctx);
+    refresh();
+  });
+  pi.on('agent_end', () => refresh());
+  pi.on('session_shutdown', () => {
+    refresh();
+    unsubscribe?.();
+    unsubscribe = undefined;
+    context = undefined;
+    bindings.clear();
+  });
+  listen();
 
   pi.registerTool({
-    name: 'agentic_code_review_step',
-    label: 'Review step telemetry',
-    description: 'Inactive review telemetry prototype.',
+    name: 'agentic_code_review_export_telemetry',
+    label: 'Export review telemetry',
+    description: 'Return portable JSON usage, cost estimates, elapsed time and observed models for one review, one session, or all retained reviews. Includes distinct-review averages and unknown coverage. No upload or execution limits.',
     parameters: Type.Object({
-      sessionId: Type.String({ maxLength: 128 }),
-      runId: Type.String({ maxLength: 128 }),
-      stage: Type.Integer({ minimum: 1, maximum: 7 }),
-      phase: Type.String({ enum: ['start', 'end'] }),
-      outcome: Type.Optional(Type.String({ enum: ['reviewed', 'partial', 'unable'] })),
+      sessionId: Type.Optional(Type.String({ maxLength: 128 })),
+      runId: Type.Optional(Type.String({ maxLength: 128 })),
     }),
-    async execute(_id, params, signal, _update, ctx) {
+    async execute(_id, { sessionId, runId }, signal) {
       signal?.throwIfAborted();
-      const { sessionId, runId, stage, phase, outcome } = params;
-      const agentSessionId = ctx.sessionManager.getSessionId();
-      if (![sessionId, runId, agentSessionId].every(isIdentity)) {
-        throw new Error('Invalid telemetry identity.');
+      if (runId && !sessionId) throw new Error('runId requires sessionId.');
+      if ((sessionId !== undefined && !isIdentity(sessionId)) || (runId !== undefined && !isIdentity(runId))) throw new Error('Invalid telemetry identity.');
+      refresh();
+      const reviews: ReviewTelemetry[] = [];
+      let unavailableReviews = 0;
+      let sessions: string[] = [];
+      if (sessionId) sessions = [sessionId];
+      else if (existsSync(root)) {
+        sessions = readdirSync(root, { withFileTypes: true })
+          .filter(entry => entry.isDirectory() && isIdentity(entry.name))
+          .map(entry => entry.name);
       }
-      if (!Number.isInteger(stage) || stage < 1 || stage > 7) {
-        throw new Error('Invalid review stage.');
-      }
-      if (binding && (
-        binding.runId !== runId
-        || binding.sessionId !== sessionId
-        || binding.agentSessionId !== agentSessionId
-      )) {
-        throw new Error('Telemetry is already bound to another run or session.');
-      }
-      checkPersistence();
-
-      if (phase === 'start') {
-        if (activeStep) throw new Error('A review stage is already active.');
-        if (outcome !== undefined) throw new Error('Outcome belongs to a stage end.');
-      } else if (phase === 'end') {
-        if (!activeStep || activeStep.stage !== stage) {
-          throw new Error('No matching active review stage.');
+      for (const session of sessions) {
+        const directory = join(root, session);
+        if (!lstatSync(directory).isDirectory()) throw new Error('Invalid telemetry directory.');
+        const runs = runId ? [runId] : readdirSync(directory).filter(name => name.endsWith('.review.json')).map(name => name.slice(0, -'.review.json'.length));
+        for (const run of runs) {
+          try {
+            const review = readReview(session, run);
+            const live = bindings.get(keyOf(session, run))?.last;
+            const saved = object(review.telemetry);
+            const report = live ?? (saved.schemaVersion === 1 && saved.sessionId === session && saved.runId === run ? saved as ReviewTelemetry : undefined);
+            if (report) reviews.push(report);
+            else unavailableReviews++;
+          } catch (error) {
+            if (runId) throw error;
+            unavailableReviews++;
+          }
         }
-        if (!['reviewed', 'partial', 'unable'].includes(outcome ?? '')) {
-          throw new Error('A stage end requires an outcome.');
-        }
-      } else {
-        throw new Error('Invalid review phase.');
       }
-
-      if (!binding) {
-        const reviewPath = join(root, sessionId, `${runId}.review.json`);
-        if (!lstatSync(reviewPath).isFile()) {
-          throw new Error('Prepared review must be a regular file.');
-        }
-        const review = JSON.parse(readFileSync(reviewPath, 'utf8'));
-        if (
-          review.sessionId !== sessionId
-          || review.runId !== runId
-          || !['prepared', 'running'].includes(review.status)
-        ) {
-          throw new Error('Telemetry requires a matching open prepared review.');
-        }
-
-        const directory = join(root, sessionId, `${runId}.telemetry`);
-        mkdirSync(directory, { recursive: true, mode: 0o700 });
-        if (!lstatSync(directory).isDirectory()) {
-          throw new Error('Telemetry directory must be a regular directory.');
-        }
-        const path = join(directory, `${agentSessionId}-${randomUUID()}.jsonl`);
-        writeFileSync(path, '', { flag: 'wx', mode: 0o600 });
-        binding = { sessionId, runId, agentSessionId, path };
-        emit('capture_start', {
-          queueMs: null,
-          startupMs: null,
-          preBindingEvents: 'unavailable',
-        });
-      }
-
-      if (phase === 'start') {
-        activeStep = { stage, started: now() };
-        emit('step_start');
-      } else {
-        emit('step_end', {
-          durationMs: elapsed(activeStep!.started),
-          outcome,
-        });
-        activeStep = undefined;
-      }
-      checkPersistence();
-
+      const details = {
+        schemaVersion: 1,
+        exportedAt: now(),
+        reviews,
+        summary: summarizeReviewTelemetry(reviews),
+        unavailableReviews,
+      };
       return {
-        content: [{
-          type: 'text',
-          text: `Review stage ${stage} ${phase} recorded. Telemetry: ${binding.path}`,
-        }],
-        details: { path: binding.path, agentSessionId, stage, phase },
+        content: [{ type: 'text' as const, text: JSON.stringify(details) }],
+        details,
       };
     },
   });
-
-  pi.on('before_provider_request', (_event, ctx) => {
-    if (!observesSession(ctx)) return;
-    if (activeRequest) {
-      emit('model_unfinished', {
-        requestId: activeRequest.id,
-        stage: activeRequest.stage,
-        durationMs: elapsed(activeRequest.started),
-      });
-    }
-    activeRequest = {
-      id: ++requestSequence,
-      started: now(),
-      stage: activeStep?.stage ?? null,
-      model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null,
-    };
-    emit('model_start', {
-      requestId: activeRequest.id,
-      model: activeRequest.model,
-      thinking: ctx.thinkingLevel ?? null,
-    });
-  });
-
-  pi.on('after_provider_response', (event, ctx) => {
-    if (observesSession(ctx)) {
-      emit('provider_response', {
-        requestId: activeRequest?.id ?? null,
-        status: event.status,
-        durationMs: activeRequest ? elapsed(activeRequest.started) : null,
-      });
-    }
-  });
-
-  pi.on('message_update', (event, ctx) => {
-    if (!observesSession(ctx) || !activeRequest) return;
-    const update = event.assistantMessageEvent;
-    if (
-      !['text_delta', 'thinking_delta', 'toolcall_delta'].includes(update.type)
-      || !('delta' in update)
-      || !update.delta
-    ) {
-      return;
-    }
-
-    activeRequest.firstDelta ??= now();
-    if (update.type === 'text_delta') activeRequest.firstText ??= now();
-  });
-
-  pi.on('message_end', (event, ctx) => {
-    if (!observesSession(ctx) || event.message.role !== 'assistant') return;
-    const usage = event.message.usage;
-    const durationMs = activeRequest ? elapsed(activeRequest.started) : null;
-    const output = nonnegativeMetric(usage?.output);
-
-    emit('model_end', {
-      requestId: activeRequest?.id ?? null,
-      stage: activeRequest?.stage ?? activeStep?.stage ?? null,
-      model: activeRequest?.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null),
-      durationMs,
-      timeToFirstDeltaMs: activeRequest?.firstDelta !== undefined
-        ? activeRequest.firstDelta - activeRequest.started
-        : null,
-      timeToFirstTextMs: activeRequest?.firstText !== undefined
-        ? activeRequest.firstText - activeRequest.started
-        : null,
-      outputTokensPerSecond: output !== null && durationMs !== null && durationMs > 0
-        ? output * 1000 / durationMs
-        : null,
-      stopReason: event.message.stopReason,
-      usage: {
-        input: nonnegativeMetric(usage?.input),
-        output,
-        cacheRead: nonnegativeMetric(usage?.cacheRead),
-        cacheWrite: nonnegativeMetric(usage?.cacheWrite),
-        totalTokens: nonnegativeMetric(usage?.totalTokens),
-        costUsd: nonnegativeMetric(usage?.cost?.total),
-      },
-    });
-    activeRequest = undefined;
-  });
-
-  pi.on('tool_execution_start', (event, ctx) => {
-    if (!observesSession(ctx)) return;
-    activeTools.set(event.toolCallId, {
-      started: now(),
-      stage: activeStep?.stage ?? null,
-      name: event.toolName,
-    });
-    emit('tool_start', {
-      toolCallId: event.toolCallId,
-      toolName: event.toolName,
-    });
-  });
-
-  pi.on('tool_execution_end', (event, ctx) => {
-    if (!observesSession(ctx)) return;
-    const tool = activeTools.get(event.toolCallId);
-    emit('tool_end', {
-      toolCallId: event.toolCallId,
-      toolName: event.toolName,
-      stage: tool?.stage ?? null,
-      durationMs: tool ? elapsed(tool.started) : null,
-      isError: event.isError,
-    });
-    activeTools.delete(event.toolCallId);
-  });
-
-  pi.on('session_shutdown', (_event, ctx) => {
-    if (!observesSession(ctx)) return;
-    if (activeStep) {
-      emit('step_end', {
-        durationMs: elapsed(activeStep.started),
-        outcome: 'interrupted',
-      });
-    }
-    if (activeRequest) {
-      emit('model_unfinished', {
-        requestId: activeRequest.id,
-        stage: activeRequest.stage,
-        durationMs: elapsed(activeRequest.started),
-      });
-    }
-    for (const [toolCallId, tool] of activeTools) {
-      emit('tool_unfinished', {
-        toolCallId,
-        toolName: tool.name,
-        stage: tool.stage,
-        durationMs: elapsed(tool.started),
-      });
-    }
-    emit('session_end');
-
-    binding = undefined;
-    activeStep = undefined;
-    activeRequest = undefined;
-    activeTools.clear();
-  });
+  return { start, finish };
 }
