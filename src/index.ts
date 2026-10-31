@@ -210,6 +210,50 @@ const completionWatchers = new Map<string, FSWatcher>();
 const processMonitors = new Map<string, AbortController>();
 const watchdogEnabled = (pi: ExtensionAPI) => (pi as ExtensionAPI & { __disableAutoReviewWatchdog?: boolean }).__disableAutoReviewWatchdog !== true;
 
+type CompletionMarker = {
+  sessionId: string;
+  runId: string;
+  status: string;
+  summary: string;
+  reviewPane?: { paneId: string; sessionFile: string };
+};
+
+async function closeReviewPane(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>, marker: CompletionMarker): Promise<void> {
+  const pane = marker.reviewPane;
+  if (
+    run.details.reviewSession.mode !== 'pane' || marker.status !== 'complete'
+    || marker.sessionId !== run.details.sessionId || marker.runId !== run.details.runId
+    || !pane || typeof pane.paneId !== 'string' || typeof pane.sessionFile !== 'string'
+    || pane.paneId === process.env.HERDR_PANE_ID
+  ) return;
+  try {
+    const settled = await pi.exec('herdr', [
+      'agent', 'wait', pane.paneId, '--until', 'idle', '--until', 'done', '--timeout', '10000',
+    ], { timeout: 15_000 });
+    if (settled.code !== 0) throw new Error('Reviewer did not become idle.');
+    const current = await pi.exec('herdr', ['agent', 'get', pane.paneId], { timeout: 10_000 });
+    if (current.code !== 0) throw new Error('Reviewer identity could not be checked.');
+    const agent = (JSON.parse(current.stdout) as { result?: { agent?: {
+      pane_id?: string;
+      agent_status?: string;
+      agent_session?: { kind?: string; value?: string };
+    } } }).result?.agent;
+    if (agent?.pane_id !== pane.paneId || agent.agent_session?.kind !== 'path'
+      || agent.agent_session.value !== pane.sessionFile
+      || !['idle', 'done'].includes(agent.agent_status ?? '')) {
+      throw new Error('Pane no longer contains the idle reviewer.');
+    }
+    const closed = await pi.exec('herdr', ['pane', 'close', pane.paneId], { timeout: 10_000 });
+    if (closed.code !== 0) throw new Error(closed.stderr || 'Herdr refused to close the pane.');
+  } catch (error) {
+    pi.sendMessage({
+      customType: 'agentic-code-review-cleanup',
+      content: `Review complete, but could not close pane ${pane.paneId}: ${error instanceof Error ? error.message : String(error)}`,
+      display: true,
+    }, { triggerTurn: false });
+  }
+}
+
 function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>): () => void {
   const { runId, paths, reviewSession } = run.details;
   const directory = dirname(paths.complete);
@@ -222,8 +266,8 @@ function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>
     completionWatchers.delete(runId);
   };
   const completed = () => {
-    if (!existsSync(paths.complete)) return;
-    const marker = JSON.parse(readFileSync(paths.complete, 'utf8')) as { summary?: unknown; status?: unknown };
+    if (closed || !existsSync(paths.complete)) return;
+    const marker = JSON.parse(readFileSync(paths.complete, 'utf8')) as CompletionMarker;
     close();
     processMonitors.get(runId)?.abort();
     processMonitors.delete(runId);
@@ -233,6 +277,7 @@ function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>
       details: { runId, paths, reviewSession, marker, telemetry: JSON.parse(readFileSync(paths.review, 'utf8')).telemetry ?? null },
       display: true,
     }, { triggerTurn: true, deliverAs: 'followUp' });
+    void closeReviewPane(pi, run, marker);
   };
   watcher = watch(directory, () => completed());
   completionWatchers.set(runId, watcher);
@@ -398,7 +443,19 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       const tempReview = `${reviewPath}.${randomUUID()}.tmp`;
       writeFileSync(tempReview, JSON.stringify(review) + '\n', { flag: 'wx', mode: 0o600 });
       renameSync(tempReview, reviewPath);
-      const marker = { sessionId, runId, status: (review as { status: string }).status, completedAt: (review as { completedAt: string }).completedAt, summary };
+      const paneId = process.env.HERDR_PANE_ID;
+      const separatePane = ctx?.hasUI && process.env.HERDR_ENV === '1' && paneId
+        && ctx.sessionManager.getSessionId() !== sessionId
+        && (review as { reviewSession?: { mode?: string } }).reviewSession?.mode === 'pane';
+      const sessionFile = separatePane ? ctx.sessionManager.getSessionFile() : undefined;
+      const reviewPane = paneId && sessionFile ? { paneId, sessionFile } : undefined;
+      const marker = {
+        sessionId, runId,
+        status: (review as { status: string }).status,
+        completedAt: (review as { completedAt: string }).completedAt,
+        summary,
+        ...(reviewPane ? { reviewPane } : {}),
+      };
       const encoded = `${JSON.stringify(marker)}\n`;
       if (existsSync(completePath)) {
         if (readFileSync(completePath, 'utf8') !== encoded) throw new Error('A different completion was already saved for this run.');
@@ -475,9 +532,25 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   });
 
   pi.registerCommand('code-review', {
-    description: 'Preflight the target and run the automatic review in this Pi session; optional context is plain text.',
+    description: 'Run the review here if this session is clean, otherwise in a fresh Pi session; optional context is plain text.',
     handler: async (context, ctx) => {
       try {
+        const dirty = ctx.sessionManager.getBranch().some(entry =>
+          (entry.type === 'message' && entry.message.role !== 'system')
+          || entry.type === 'custom_message'
+          || entry.type === 'compaction'
+          || entry.type === 'branch_summary');
+        if (dirty) {
+          const result = await launch(context, ctx, ctx.signal);
+          pi.sendMessage({
+            customType: 'agentic-code-review',
+            content: result.content[0].text,
+            details: result.details,
+            display: true,
+          }, { triggerTurn: false });
+          return;
+        }
+
         const preflight = await preflightReview(pi, ctx, context, root);
         const run = prepareReview(pi, ctx, context, root, preflight, 'current', ctx.signal);
         const closeWatcher = watchCompletion(pi, run);

@@ -17,7 +17,7 @@ Return one complete, decision-ready code review. The requester sees the change, 
 3. Fetch PR body, threads/comments and CI into run-scoped files. Record unavailable optional inputs as gaps.
 4. Validate model and the requested thinking level.
 5. Show target, range, checkout, model, thinking and artifact path.
-6. Start the mission. `agentic_code_review` starts a dedicated Pi session in a new Herdr pane; if pane launch fails twice, it runs the same mission in a headless Pi process. `/code-review` sets the current session to the preflighted model and thinking level and sends the mission there as a user message; no pane or watchdog is involved.
+6. Start the mission. `/code-review` runs directly in a clean active branch, adopting the preflighted model and thinking level. Prior conversation or custom context messages and compaction or branch summaries make the branch dirty; startup metadata and system instructions do not. For a dirty branch, the command uses the same separate-session launcher as `agentic_code_review`: a new Herdr pane, or a fresh headless Pi process if pane launch fails. That path leaves the caller's history and model settings behind. Both paths return completion to the invoking session.
 
 ## Pack
 
@@ -65,7 +65,7 @@ End the turn after spawning. The grouped report resumes the session with every l
 - Provider input unavailable: use the available metadata/patch and ask once only when a decision-changing input is required.
 - Scan failure: review diff-only.
 - Lane failure or stop: top-level session completes its assigned items.
-- Session exits without a marker: parent watchdog resumes a pane session; if unavailable, launch one fallback session. A `/code-review` run in the current session has no watchdog; the user resumes it by asking.
+- Session exits without a marker: parent watchdog resumes a pane session; if unavailable, launch one fallback session. A review running directly in a clean session has no watchdog; the user resumes it by asking.
 - Herdr unavailable: use the headless review session.
 - Parent reload: reattach to durable completion markers and deliver each handoff once. Pane runs without a marker get a fallback session; current-session runs only get their watcher back.
 
@@ -77,4 +77,4 @@ Timing records measure preflight, pack, review and synthesis so later work can i
 - Evidence map and pack artifacts.
 - Every proposed inline comment in the initial presentation.
 - Codebase current/delta notes for continuity.
-- One idempotent completion marker that wakes the invoking session.
+- One idempotent completion marker that wakes the invoking session. Separate interactive reviews include their pane and session-file identity so the caller can close the pane after handoff. Cleanup waits for idle and checks the live identity; failure leaves a warning, not another review launch.

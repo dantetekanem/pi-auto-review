@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 (2026-10-31)
+
+### Fixed
+
+- `/code-review` starts a fresh reviewer when the active branch contains earlier conversation. Clean sessions still run the review directly; startup metadata and abandoned branches do not force another launch.
+- Completed review panes close automatically after the saved report is handed back. Cleanup waits for the reviewer to become idle and checks its session identity before closing the pane. Direct and headless reviews leave the caller's pane open; cleanup failures keep the report available and show a warning.
+
 ## 0.7.0 (2026-10-30)
 
 ### Added
