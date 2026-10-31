@@ -4,6 +4,11 @@ An experiment in automatic, evidence-backed code review for [Pi](https://pi.dev)
 Independent agents collect context, trace connected behavior, and review the change.
 The final report explains what it does, how it works, and where it falls short.
 
+## What's new in 0.7.1
+
+- `/code-review` isolates reviews from prior conversation while keeping clean sessions in place.
+- Completed review panes close after handoff, with an idle-state and session-identity check. Reports remain available if cleanup fails.
+
 ## What's new in 0.7.0
 
 - Per-run coordinator model/thinking selection and a completion handoff that does not pause previously authorized work.
@@ -40,11 +45,11 @@ Run this from the codebase you want reviewed:
 /code-review https://github.com/owner/repo/pull/123
 ```
 
-Both entry points run the same mission. They differ only in where it runs.
+Both entry points run the same mission. `/code-review` uses the current session only when its active branch is clean; the agent tool always starts a separate session.
 
-`/code-review` preflights the target, exact range, active model and its effective thinking level, writes the run artifacts, then runs the review in the current Pi session. It preserves that level when the selected model supports it. If a medium review needs another model, preflight can choose a medium-capable model; high and xhigh never fall back to medium. The command sets this session to the preflighted model and thinking level, sends the mission as a user message and does not open a pane or ask for confirmation. When the review completes, the same session receives the handoff and presents the report.
+`/code-review` checks the active branch before starting. Prior conversation messages, custom context messages, compaction summaries or branch summaries make it dirty. Startup metadata, system instructions and abandoned branches do not. A clean session adopts the preflighted model and thinking level and runs the mission directly. A dirty session starts a named Pi session in a new Herdr pane without passing its conversation history or changing its own model settings. If the pane cannot launch, a fresh headless process runs the mission. Both paths preflight the target and exact range, preserve supported thinking levels, and return completion to the invoking session. High and xhigh never fall back to medium.
 
-Agents call `agentic_code_review` with plain-text context. That tool runs the same preflight, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one pi-extended-teams batch, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane. The tool also accepts optional per-run `model` (`provider/model`) and `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`) arguments; omitted fields follow the existing selection/inheritance behavior, and explicit values are validated before artifacts or launch.
+Agents call `agentic_code_review` with plain-text context. That tool runs the same preflight, then starts a named Pi session in a new visible Herdr pane. That session prepares the pack, launches one pi-extended-teams batch, reconciles, saves learning and completes a file-based handoff to the invoking session. There is no delegated controller. A genuine intake question appears in the visible review pane. After completion handoff, the runtime waits up to ten seconds for the reviewer to become idle, checks its session identity and closes only that pane. Cleanup failures show a warning without restarting the review or losing its report. Direct and headless reviews do not close the caller's pane. The tool also accepts optional per-run `model` (`provider/model`) and `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`) arguments; omitted fields follow the existing selection/inheritance behavior, and explicit values are validated before artifacts or launch.
 
 For example, select a coordinator without changing the invoking session or its worker tiers:
 
@@ -56,7 +61,7 @@ agentic_code_review({
 })
 ```
 
-When a review already runs in another Pi session, `agentic_code_review_subscribe` can register one bounded handoff using the exact review session ID, run ID, expected target, and expected head. It validates those saved artifacts but does not prove this session launched the review or that the caller's relevance decision is correct. Same-session `/code-review` runs keep their native watcher. Missing, malformed, failed, or timed-out artifacts send a failure handoff, not a review result.
+When a review already runs in another Pi session, `agentic_code_review_subscribe` can register one bounded handoff using the exact review session ID, run ID, expected target, and expected head. It validates those saved artifacts but does not prove this session launched the review or that the caller's relevance decision is correct. Reviews started by `/code-review` already have a native watcher in the invoking session. Missing, malformed, failed, or timed-out artifacts send a failure handoff, not a review result.
 
 For a pull request URL the review session first pulls the PR itself through the provider's CLI (`gh` for github.com, `gs` for Meteorite), read-only: the description becomes a requirement source, existing review threads and bot comments become evidence to reconcile rather than repeat, and CI becomes a process condition. The [PR context contract](prompts/pr-context.md) has the commands and record shapes.
 
@@ -72,7 +77,7 @@ The report links evidence and gaps for all three passes. Each run saves verified
 
 `agentic_code_review_execute_experiment` connects the review to a trusted-program or restricted Node worker. It runs only host-prepared check or family IDs, not commands or probes supplied by the reviewer. With no configured plan it reports unavailable; source-only reviews still work.
 
-After approving the exact program and its effects, the host starts a **fresh Pi process** with `PI_AUTO_REVIEW_REPLAY_PLAN` set to an absolute JSON manifest path and `PI_AUTO_REVIEW_REPLAY_SHA256` set to its SHA256. Run `/code-review` in that process. Do not ask the reviewing model to create its own authorization. A prompt, an `approved` field or an old pane does not configure the host.
+After approving the exact program and its effects, the host starts a **fresh Pi process** with `PI_AUTO_REVIEW_REPLAY_PLAN` set to an absolute JSON manifest path and `PI_AUTO_REVIEW_REPLAY_SHA256` set to its SHA256. Run `/code-review` before adding conversation history so the review stays in that clean process. Do not ask the reviewing model to create its own authorization. A prompt, an `approved` field or an old pane does not configure the host.
 
 The manifest has `schemaVersion: 1`, `expiresAt` (UTC timestamp), exact `target`, `checkout`, `base`, `head`, and `checks: [{ id, maxAttempts, request }]`. Each request follows [`ReplayRequest`](src/experiments-replay.ts), without `runId`: an absolute executable and cwd, copied script name, argv, pinned file hashes, allowed environment, exact output headers/case identities and time/output limits. Pin the script, executable and relevant source, fixtures and dependencies. The runtime binds the request to the prepared run. There may be at most six checks and ten total attempts.
 

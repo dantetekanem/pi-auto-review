@@ -105,6 +105,8 @@ function createReviewFixture(t, sessionId = 'session-1') {
     },
     sessionManager: {
       getSessionId: () => sessionId,
+      getSessionFile: () => join(dir, `${sessionId}.jsonl`),
+      getBranch: () => ctx.sessionManager.getEntries(),
       getEntries: () => [...messages.map(item => ({ type: 'custom_message', customType: item.message.customType, content: item.message.content, details: item.message.details, display: item.message.display ?? false })), ...nativeEntries],
     },
     ui: {
@@ -229,8 +231,9 @@ test('tool preserves active high and xhigh thinking through launch and saved pre
   }
 });
 
-test('current-session review adopts an exact xhigh-capable model without downgrading', async t => {
+test('slash command launches the exact xhigh-capable model without changing the dirty caller', async t => {
   const harness = createReviewFixture(t);
+  harness.nativeEntries.push({ type: 'message', message: { role: 'user', content: 'Earlier work' } });
   harness.ctx.model.reasoning = false;
   harness.ctx.thinkingLevel = 'xhigh';
   harness.behavior.thinkingLevel = 'medium';
@@ -240,23 +243,13 @@ test('current-session review adopts an exact xhigh-capable model without downgra
 
   await harness.command('');
 
-  assert.deepEqual(harness.modelChanges.map(model => `${model.provider}/${model.id}`), ['openai/xhigh-model']);
-  assert.deepEqual(harness.thinkingChanges, ['xhigh']);
+  const start = call(harness, 'herdr', ['agent', 'start']);
+  assert.ok(start);
+  assert.equal(start.args[start.args.indexOf('--model') + 1], 'openai/xhigh-model');
+  assert.equal(start.args[start.args.indexOf('--thinking') + 1], 'xhigh');
+  assert.deepEqual(harness.modelChanges, []);
+  assert.deepEqual(harness.thinkingChanges, []);
   assert.equal(readJson(harness.messages[0].message.details.paths.review).preflight.thinking, 'xhigh');
-  assert.match(harness.messages[0].message.content, /set model openai\/xhigh-model, thinking xhigh/);
-});
-
-test('current-session review refuses a runtime thinking clamp', async t => {
-  const harness = createReviewFixture(t);
-  harness.ctx.thinkingLevel = 'high';
-  harness.behavior.thinkingLevel = 'medium';
-  harness.behavior.setThinking = false;
-
-  await harness.command('');
-
-  assert.deepEqual(harness.thinkingChanges, ['high']);
-  assert.equal(harness.userMessages.length, 0);
-  assert.match(harness.notices[0][0], /could not select thinking high/);
 });
 
 test('xhigh preflight fails instead of falling back to a medium-only model', async t => {
@@ -396,14 +389,18 @@ test('provider metadata or commit failures launch from a saved provider patch in
   assert.match(readFileSync(commit.details.paths.patch, 'utf8'), /\+fallback/);
 });
 
-test('slash command preflights, sets this session to medium and runs the mission here without a pane', async t => {
+test('slash command launches a fresh review and returns its completion to the existing session', async t => {
   const harness = createReviewFixture(t);
+  harness.nativeEntries.push({ id: 'dirty-context', type: 'message', message: {
+    role: 'user', content: 'Earlier implementation discussion that must not enter the review.',
+  } });
   await harness.command('https://github.com/owner/repo/pull/7');
 
   assert.equal(harness.confirmations.length, 0);
-  assert.equal(harness.execCalls.filter(item => item.command === 'herdr' || item.command === 'pi').length, 0);
+  const start = call(harness, 'herdr', ['agent', 'start']);
+  assert.ok(start);
   assert.ok(call(harness, 'gh', ['pr', 'view']));
-  assert.deepEqual(harness.thinkingChanges, ['medium']);
+  assert.deepEqual(harness.thinkingChanges, []);
   assert.deepEqual(harness.modelChanges, []);
 
   const receipts = harness.messages.filter(item => item.message.customType === 'agentic-code-review');
@@ -411,17 +408,17 @@ test('slash command preflights, sets this session to medium and runs the mission
   assert.equal(receipts[0].options.triggerTurn, false);
   assert.match(receipts[0].message.content, /Target: GitHub change — https:\/\/github\.com\/owner\/repo\/pull\/7/);
   assert.match(receipts[0].message.content, /Thinking: medium/);
-  assert.match(receipts[0].message.content, /Session: review-[0-9a-f]{8} in this Pi session \(set thinking medium\)/);
+  assert.match(receipts[0].message.content, /Session: review-[0-9a-f]{8} in Herdr pane w1:p2/);
   const { paths, runId, sessionId, reviewSession } = receipts[0].message.details;
-  assert.equal(reviewSession.mode, 'current');
-
-  assert.deepEqual(harness.userMessages, [{
-    message: `Read the complete auto-review mission at ${paths.mission} and execute it now.`,
-    options: { deliverAs: 'followUp' },
-  }]);
+  assert.deepEqual(start.args.slice(start.args.indexOf('--') + 1), [
+    '--model', 'openai/gpt-test', '--thinking', 'medium', '--name', reviewSession.name,
+  ]);
+  const prompt = call(harness, 'herdr', ['agent', 'prompt']);
+  assert.equal(prompt.args.at(-1), `Read the complete auto-review mission at ${paths.mission} and execute it now.`);
+  assert.deepEqual(harness.userMessages, []);
   const review = readJson(paths.review);
   assert.equal(review.status, 'prepared');
-  assert.equal(review.reviewSession.mode, 'current');
+  assert.equal(review.reviewSession.mode, 'pane');
   assert.equal(review.preflight.model, 'openai/gpt-test');
   assert.equal(review.preflight.thinking, 'medium');
   assert.match(readFileSync(paths.mission, 'utf8'), /visible top-level review session/);
@@ -433,12 +430,17 @@ test('slash command preflights, sets this session to medium and runs the mission
   harness.nativeEntries.push({ id: 'before-mission', type: 'message', message: {
     role: 'assistant', provider: 'test', model: 'earlier-turn', usage: { cost: { total: 9 } },
   } });
-  await harness.eventHandlers.get('before_agent_start')({ prompt: harness.userMessages[0].message }, harness.ctx);
+  const reviewContext = { ...harness.ctx, sessionManager: {
+    ...harness.ctx.sessionManager, getSessionId: () => 'fresh-review-session',
+  } };
+  await harness.eventHandlers.get('before_agent_start')({ prompt: prompt.args.at(-1) }, reviewContext);
   harness.nativeEntries.push({ id: 'observed-review-response', type: 'message', message: {
     role: 'assistant', provider: 'test', model: 'observed-model', usage: { cost: { total: 0.2 } },
   } });
   writeFileSync(paths.review, JSON.stringify({ ...review, status: 'complete', completedAt: '2026-09-15T00:00:00Z', findings: [], commentDrafts: [] }));
-  const completion = await harness.complete({ sessionId, runId, summary: 'Clean change.' });
+  const completion = await harness.tools.get('agentic_code_review_complete').execute(
+    'complete-1', { sessionId, runId, summary: 'Clean change.' }, undefined, undefined, reviewContext,
+  );
   assert.equal(completion.terminate, true);
   assert.equal(completion.details.telemetry.cost.totalUsd, 0.2);
   assert.equal(completion.details.telemetry.models[0].model, 'observed-model');
@@ -453,27 +455,78 @@ test('slash command preflights, sets this session to medium and runs the mission
   assert.deepEqual(external.message.details.telemetry, completion.details.telemetry);
 });
 
-test('slash command switches this session to the preflighted medium model and reports a failed switch', async t => {
+test('slash command uses a fresh headless process when a review pane is unavailable', async t => {
+  const harness = createReviewFixture(t);
+  harness.nativeEntries.push({ type: 'message', message: { role: 'user', content: 'Earlier work' } });
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  harness.behavior.execute = (command, args, options) => command === 'herdr'
+    ? { code: 1, stdout: '', stderr: 'pane unavailable' }
+    : fallback(command, args, options);
+  await harness.command('');
+
+  const child = call(harness, 'pi', ['--mode', 'json']);
+  assert.ok(child);
+  const { paths } = harness.messages[0].message.details;
+  assert.deepEqual(child.args, [
+    '--mode', 'json', '-p', '--no-session', '--no-approve',
+    '--model', 'openai/gpt-test', '--thinking', 'medium',
+    `Read the complete auto-review mission at ${paths.mission} and execute it now.`,
+  ]);
+  assert.deepEqual(harness.userMessages, []);
+});
+
+test('slash command runs directly in a clean active branch without launching another session', async t => {
+  const harness = createReviewFixture(t);
+  harness.nativeEntries.push({ type: 'message', message: { role: 'user', content: 'Abandoned branch' } });
+  harness.ctx.sessionManager.getBranch = () => [
+    { type: 'model_change', provider: 'openai', modelId: 'gpt-test' },
+    { type: 'thinking_level_change', thinkingLevel: 'medium' },
+    { type: 'custom', customType: 'extension-state', data: {} },
+    { type: 'message', message: { role: 'system', content: 'Startup instructions' } },
+  ];
+  await harness.command('Check the retry contract.');
+
+  const { paths } = harness.messages[0].message.details;
+  assert.equal(readJson(paths.review).reviewSession.mode, 'current');
+  assert.equal(readJson(paths.review).context, 'Check the retry contract.');
+  assert.deepEqual(harness.userMessages, [{
+    message: `Read the complete auto-review mission at ${paths.mission} and execute it now.`,
+    options: { deliverAs: 'followUp' },
+  }]);
+  assert.equal(harness.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
+  assert.deepEqual(harness.thinkingChanges, ['medium']);
+});
+
+test('slash command treats conversation messages and summaries as dirty', async t => {
+  for (const entry of [
+    { type: 'message', message: { role: 'assistant', content: [] } },
+    { type: 'message', message: { role: 'toolResult', content: [] } },
+    { type: 'custom_message', customType: 'context', content: 'Prior context', display: false },
+    { type: 'compaction', summary: 'Prior work' },
+    { type: 'branch_summary', summary: 'Prior branch' },
+  ]) {
+    const harness = createReviewFixture(t);
+    harness.nativeEntries.push(entry);
+    await harness.command('');
+    assert.ok(call(harness, 'herdr', ['agent', 'start']), entry.type);
+    assert.deepEqual(harness.userMessages, []);
+  }
+});
+
+test('clean-session review adopts its preflight model and refuses a thinking clamp', async t => {
   const harness = createReviewFixture(t);
   harness.ctx.model.reasoning = false;
   harness.ctx.scopedModels = [{ model: { provider: 'anthropic', id: 'medium-model', reasoning: true } }];
   await harness.command('');
-
   assert.deepEqual(harness.modelChanges.map(model => `${model.provider}/${model.id}`), ['anthropic/medium-model']);
-  assert.deepEqual(harness.thinkingChanges, ['medium']);
   assert.equal(harness.userMessages.length, 1);
-  assert.match(harness.messages[0].message.content, /set model anthropic\/medium-model, thinking medium/);
 
-  const refused = createReviewFixture(t, 'refused-switch');
-  refused.ctx.model.reasoning = false;
-  refused.ctx.scopedModels = [{ model: { provider: 'anthropic', id: 'medium-model', reasoning: true } }];
-  refused.behavior.setModel = false;
+  const refused = createReviewFixture(t, 'refused-thinking');
+  refused.ctx.thinkingLevel = 'high';
+  refused.behavior.setThinking = false;
   await refused.command('');
-  assert.equal(refused.notices.length, 1);
-  assert.match(refused.notices[0][0], /could not switch to anthropic\/medium-model/);
-  assert.equal(refused.notices[0][1], 'error');
+  assert.match(refused.notices[0][0], /could not select thinking high/);
   assert.deepEqual(refused.userMessages, []);
-  assert.deepEqual(refused.thinkingChanges, []);
 });
 
 test('slash command failures surface as one notice and send no mission', async t => {
@@ -492,10 +545,11 @@ test('slash command failures surface as one notice and send no mission', async t
   await assert.rejects(harness.command(''), /session/i);
 });
 
-test('session reload keeps a current-session run on its watcher instead of launching a pane', async t => {
+test('session reload keeps a clean-session review on its watcher instead of launching a pane', async t => {
   const harness = createReviewFixture(t);
   await harness.command('');
   const { paths, runId, sessionId } = harness.messages[0].message.details;
+  assert.equal(readJson(paths.review).reviewSession.mode, 'current');
   harness.eventHandlers.get('session_shutdown')();
   harness.execCalls.length = 0;
 
@@ -580,6 +634,54 @@ test('prepared artifacts are private and completion wakes the invoking session e
   await assert.rejects(harness.complete({ sessionId, runId, summary: 'Different' }), /different completion/i);
   await settleWatcher();
   assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1);
+});
+
+test('completion closes only its recorded reviewer pane after handing off the report', async t => {
+  for (const scenario of ['matching', 'replaced', 'busy', 'wait-failed', 'headless', 'current', 'close-failed', 'reloaded']) {
+    const harness = createReviewFixture(t, `cleanup-${scenario}`);
+    const { paths, sessionId, runId } = (await harness.tool()).details;
+    const review = readJson(paths.review);
+    if (scenario === 'current') review.reviewSession.mode = 'current';
+    writeFileSync(paths.review, JSON.stringify({ ...review, status: 'complete', completedAt: '2026-10-31T00:00:00Z' }));
+    const sessionFile = join(harness.dir, 'reviewer.jsonl');
+    const reviewContext = { ...harness.ctx, hasUI: scenario !== 'headless', sessionManager: {
+      ...harness.ctx.sessionManager,
+      getSessionId: () => scenario === 'current' ? sessionId : 'reviewer',
+      getSessionFile: () => sessionFile,
+    } };
+    const fallback = harness.behavior.execute.bind(harness.behavior);
+    harness.behavior.execute = (command, args, options) => {
+      if (scenario === 'wait-failed' && command === 'herdr' && args[1] === 'wait') {
+        return { code: 1, stdout: '', stderr: 'timeout' };
+      }
+      if (command === 'herdr' && args[0] === 'agent' && args[1] === 'get') {
+        return { code: 0, stdout: JSON.stringify({ result: { agent: {
+          pane_id: 'w1:p2', agent_status: scenario === 'busy' ? 'working' : 'done',
+          agent_session: { kind: 'path', value: scenario === 'replaced' ? '/another-session.jsonl' : sessionFile },
+        } } }), stderr: '' };
+      }
+      if (command === 'herdr' && args[0] === 'pane' && args[1] === 'close') {
+        assert.equal(harness.messages.at(-1).message.customType, 'agentic-code-review-complete');
+        assert.equal(readJson(paths.review).status, 'complete');
+        assert.equal(args[2], 'w1:p2');
+        return { code: scenario === 'close-failed' ? 1 : 0, stdout: '', stderr: 'close unavailable' };
+      }
+      return fallback(command, args, options);
+    };
+    if (scenario === 'reloaded') await harness.eventHandlers.get('session_shutdown')();
+    process.env.HERDR_PANE_ID = 'w1:p2';
+    await harness.tools.get('agentic_code_review_complete').execute(
+      'complete', { sessionId, runId, summary: 'Done.' }, undefined, undefined, reviewContext,
+    );
+    process.env.HERDR_PANE_ID = 'w1:p1';
+    if (scenario === 'reloaded') await harness.eventHandlers.get('session_start')({}, harness.ctx);
+    await settleWatcher();
+
+    const shouldClose = ['matching', 'close-failed', 'reloaded'].includes(scenario);
+    assert.equal(harness.execCalls.filter(item => item.command === 'herdr' && item.args[0] === 'pane' && item.args[1] === 'close').length, shouldClose ? 1 : 0, scenario);
+    assert.equal(harness.messages.filter(item => item.message.customType === 'agentic-code-review-complete').length, 1, scenario);
+    if (scenario === 'close-failed') assert.match(harness.messages.at(-1).message.content, /could not close.*w1:p2/i);
+  }
 });
 
 test('completion refuses unlinked machine evidence even when its prose is marked complete', async t => {
