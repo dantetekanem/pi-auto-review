@@ -36,6 +36,19 @@ pi install git:github.com/dantetekanem/pi-auto-review
 
 Run from a Herdr-managed Pi pane. In `/agents-extensions`, allow `pi-auto-review/src/index.ts` for child agents so they can submit findings; allow the canonical `pi-agentic-search/index.ts` so the top-level review session can build its pack. Select the actual installed paths, preserving other selections rather than enabling every extension. Configure `read-collect` and `read-review` at `medium`. Auto-review never selects another worker tier. Pi extensions have full local access; inspect the source before installing.
 
+## Local development
+
+Use Node.js 22+ and pnpm 11. From a fresh clone:
+
+```sh
+pnpm install
+pnpm test
+```
+
+`pnpm-workspace.yaml` explicitly denies install scripts for `@google/genai`, `protobufjs` and `esbuild`; they are not needed for this project's tests. No interactive build approval or dependency-verification bypass is required. Review any new dependency script before changing this policy.
+
+The default suite leaves opt-in integrations skipped unless their required environment is configured. Skipped checks are not evidence of live integration coverage.
+
 ## Use
 
 Run this from the codebase you want reviewed:
