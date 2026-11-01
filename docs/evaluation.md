@@ -106,4 +106,6 @@ Focused tests exercise the installed Codex adapter and real Pi coordinator/nativ
 
 ## Full policy comparisons still pending
 
+The [next bounded evaluation](next-evaluation.md) selects a source-only solo-versus-fixed-batch comparison on the four existing cases. It fixes the arms, case order, proposed limits, acceptance thresholds and reporting requirements. This is an unlaunched diagnostic on exposed cases, not completion of the broader comparisons below.
+
 P21 requires a matched source-only/runtime comparison and a frozen held-out evaluation. P25 and P27 need their own policy/concurrency comparisons; these scripts and synthetic scoring tests do not substitute for them. Explain the selected provider, subscription quota versus API billing, exact run limits and remaining maximum cost before spending the authorized evaluation budget. Sol6.1/xhigh is the requested coordinator choice; do not silently substitute a different model or effort. Worker tiers retain their configured values.
