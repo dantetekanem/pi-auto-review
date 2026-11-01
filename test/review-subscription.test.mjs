@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -69,6 +69,7 @@ function fixture(t, callerId = 'caller') {
     messages,
     ctx,
     sessionFile,
+    discover: (input = {}) => tools.get('agentic_code_review_list').execute('list-1', input),
     subscribe: (input, context = ctx) =>
       tools.get('agentic_code_review_subscribe').execute('subscription-1', input, undefined, undefined, context),
     writeReview: (sessionId, data = review(sessionId)) => {
@@ -98,6 +99,93 @@ const input = {
   expectedTarget: 'https://github.com/owner/repo/pull/7',
   expectedHead: 'abcdef0123456789',
 };
+
+test('discovers recorded states without telemetry or writes and supplies subscription inputs', async (t) => {
+  const harness = fixture(t);
+  const createdAt = '2026-09-15T00:00:00.000Z';
+  for (const status of ['complete', 'prepared', 'running', 'failed']) {
+    harness.writeReview(status, review(status, {
+      status, createdAt, ...(status === 'complete' ? { completedAt: createdAt } : {}),
+      prompts: { secret: 'private prompt' }, source: 'private source', paths: { review: '/untrusted' },
+    }));
+  }
+  const snapshot = () => readdirSync(harness.root, { recursive: true }).sort().map((name) => {
+    const path = join(harness.root, name);
+    const stat = statSync(path);
+    return [name, stat.mtimeMs, stat.isFile() ? readFileSync(path, 'utf8') : null];
+  });
+  const before = snapshot();
+  const { details } = await harness.discover();
+  assert.equal(details.truncated, false);
+  assert.deepEqual(details.gaps, []);
+  assert.deepEqual(details.reviews.map((r) => r.recordedStatus).sort(), ['complete', 'failed', 'prepared', 'running']);
+  for (const entry of details.reviews) {
+    assert.deepEqual(Object.keys(entry).sort(),
+      ['reviewSessionId', 'runId', 'expectedTarget', 'expectedHead', 'recordedStatus', 'createdAt', 'completedAt', 'paths'].sort());
+    assert.equal(entry.createdAt, createdAt);
+    assert.equal(entry.completedAt, entry.recordedStatus === 'complete' ? createdAt : null);
+    assert.equal(entry.paths.review, join(harness.root, entry.reviewSessionId, `${runId}.review.json`));
+  }
+  assert.deepEqual(snapshot(), before);
+  assert.equal(harness.messages.length, 0);
+  assert.equal(harness.probe(harness.sessionFile), undefined);
+  const { reviewSessionId, runId: discoveredRun, expectedTarget, expectedHead } = details.reviews.find((r) => r.recordedStatus === 'prepared');
+  await harness.subscribe({ reviewSessionId, runId: discoveredRun, expectedTarget, expectedHead });
+  assert.equal(harness.probe(harness.sessionFile).status, 'waiting');
+});
+
+test('lists an absent root without creating it and reports invalid roots', async (t) => {
+  const harness = fixture(t);
+  assert.deepEqual((await harness.discover()).details.reviews, []);
+  assert.throws(() => statSync(harness.root), /ENOENT/);
+  writeFileSync(harness.root, 'not a directory');
+  const { details } = await harness.discover();
+  assert.equal(details.reviews.length, 0);
+  assert.equal(details.gaps.length, 1);
+});
+
+test('reports malformed, mismatched and unsafe artifacts as gaps', async (t) => {
+  const harness = fixture(t);
+  const invalid = [
+    { sessionId: 'other' }, { runId: 'other' }, { schemaVersion: 2 }, { status: 'unknown' },
+    { preflight: { target: '', head: input.expectedHead } }, { preflight: { target: input.expectedTarget } },
+    { createdAt: 'not a date' },
+  ];
+  invalid.forEach((overrides, i) => harness.writeReview(`invalid-${i}`, review(`invalid-${i}`, overrides)));
+  const malformed = harness.writeReview('malformed');
+  writeFileSync(join(malformed, `${runId}.review.json`), '{private broken JSON');
+  const oversized = harness.writeReview('oversized');
+  writeFileSync(join(oversized, `${runId}.review.json`), ' '.repeat(200001));
+  const valid = harness.writeReview('valid');
+  symlinkSync(valid, join(harness.root, 'linked-session'));
+  const linked = join(harness.root, 'linked-file');
+  mkdirSync(linked);
+  symlinkSync(join(valid, `${runId}.review.json`), join(linked, `${runId}.review.json`));
+  const { details } = await harness.discover({ limit: 100 });
+  assert.deepEqual(details.reviews.map((r) => r.reviewSessionId), ['valid']);
+  assert.equal(details.gaps.length, invalid.length + 4);
+  assert.equal(details.truncated, false);
+  assert.equal(JSON.stringify(details).includes('private broken JSON'), false);
+  assert.equal(details.reviews[0].createdAt, null);
+});
+
+test('filters exact targets and bounds results and scanned directory entries', async (t) => {
+  const harness = fixture(t);
+  for (let i = 0; i < 22; i++) harness.writeReview(`session-${i}`);
+  assert.equal((await harness.discover()).details.reviews.length, 20);
+  assert.equal((await harness.discover({ limit: 2 })).details.reviews.length, 2);
+  assert.equal((await harness.discover({ limit: 2 })).details.truncated, true);
+  assert.equal((await harness.discover({ target: input.expectedTarget })).details.reviews.length, 20);
+  assert.equal((await harness.discover({ target: input.expectedTarget + '/extra' })).details.reviews.length, 0);
+  for (const limit of [0, 101, 1.5, NaN]) await assert.rejects(harness.discover({ limit }), /limit/i);
+  for (const target of ['', 4, 'x'.repeat(4001)]) await assert.rejects(harness.discover({ target }), /target/i);
+  const directory = join(harness.root, 'many-files');
+  mkdirSync(directory);
+  for (let i = 0; i < 2100; i++) writeFileSync(join(directory, `${i}.unrelated`), '');
+  const { details } = await harness.discover({ target: 'no-match' });
+  assert.equal(details.truncated, true);
+  assert.equal(details.scannedEntries, 2000);
+});
 
 async function settle() {
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { lstatSync, readFileSync, watch, type FSWatcher, type Stats } from 'node:fs';
+import { lstatSync, opendirSync, readFileSync, watch, type FSWatcher, type Stats } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { completionFileName } from './runtime.ts';
 
@@ -30,6 +30,7 @@ type PreparedReview = {
   sessionId: unknown;
   runId: unknown;
   status: string;
+  createdAt?: unknown;
   completedAt?: unknown;
   telemetry?: unknown;
   preflight?: { target?: unknown; head?: unknown };
@@ -102,9 +103,9 @@ function preparedReview(
   paths: ArtifactPaths,
   sessionId: string,
   runId: string,
-  target: string,
-  head: string,
-): PreparedReview {
+  target?: string,
+  head?: string,
+): PreparedReview & { preflight: { target: string; head: string } } {
   requireDirectory(paths.directory);
   const review = readJson(paths.review);
   if (!review || typeof review !== 'object' || Array.isArray(review))
@@ -112,9 +113,13 @@ function preparedReview(
   const value = review as PreparedReview;
   if (value.schemaVersion !== 1 || value.sessionId !== sessionId || value.runId !== runId)
     throw new Error('The review artifact identity or schema version does not match.');
-  if (!value.preflight || value.preflight.target !== target)
+  if (typeof value.preflight?.target !== 'string' || !value.preflight.target || value.preflight.target.length > 4000)
+    throw new Error('The review artifact has an invalid target.');
+  if (typeof value.preflight.head !== 'string' || !value.preflight.head || value.preflight.head.length > 256)
+    throw new Error('The review artifact has an invalid head.');
+  if (target !== undefined && value.preflight.target !== target)
     throw new Error('The review target does not match this subscription.');
-  if (value.preflight.head !== head) throw new Error('The review head does not match this subscription.');
+  if (head !== undefined && value.preflight.head !== head) throw new Error('The review head does not match this subscription.');
   // Current reviews stay prepared until complete; findings also accepts legacy running.
   if (
     typeof value.status !== 'string' ||
@@ -122,7 +127,91 @@ function preparedReview(
   ) {
     throw new Error('The review artifact has an invalid status.');
   }
+  return { ...value, preflight: { target: value.preflight.target, head: value.preflight.head } };
+}
+
+function recordedTimestamp(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.length > 64 || !Number.isFinite(Date.parse(value)))
+    throw new Error('The review artifact has an invalid timestamp.');
   return value;
+}
+
+function retainedReviews(root: string, limit: number, target?: string) {
+  const reviews: Array<{
+    reviewSessionId: string;
+    runId: string;
+    expectedTarget: string;
+    expectedHead: string;
+    recordedStatus: string;
+    createdAt: string | null;
+    completedAt: string | null;
+    paths: ArtifactPaths;
+  }> = [];
+  const gaps: Array<{ path: string; reason: string }> = [];
+  let scannedEntries = 0;
+  let truncated = false;
+  const reachedLimit = () => reviews.length + gaps.length >= limit || scannedEntries >= 2000;
+  // Stream entries rather than loading an unbounded directory listing into memory.
+  function scan(directory: string, visit: (name: string) => void): void {
+    try {
+      requireDirectory(directory);
+      const entries = opendirSync(directory);
+      try {
+        while (!reachedLimit()) {
+          const entry = entries.readSync();
+          if (!entry) return;
+          scannedEntries++;
+          visit(entry.name);
+        }
+        truncated = true;
+      } finally {
+        entries.closeSync();
+      }
+    } catch {
+      gaps.push({ path: directory, reason: 'The review directory could not be scanned as a regular directory.' });
+    }
+  }
+  try {
+    lstatSync(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { reviews, gaps, scannedEntries, truncated };
+  }
+  scan(root, (sessionId) => {
+    if (sessionId === 'codebases') return;
+    const directory = join(root, sessionId);
+    if (!SESSION_ID.test(sessionId)) {
+      gaps.push({ path: directory, reason: 'Invalid review session directory name.' });
+      return;
+    }
+    scan(directory, (name) => {
+      if (!name.endsWith('.review.json')) return;
+      const runId = name.slice(0, -'.review.json'.length);
+      try {
+        const paths = artifactPaths(root, sessionId, runId);
+        const review = preparedReview(paths, sessionId, runId);
+        const createdAt = recordedTimestamp(review.createdAt);
+        const completedAt = recordedTimestamp(review.completedAt);
+        if (target !== undefined && review.preflight.target !== target) return;
+        reviews.push({
+          reviewSessionId: sessionId,
+          runId,
+          expectedTarget: review.preflight.target,
+          expectedHead: review.preflight.head,
+          recordedStatus: review.status,
+          createdAt,
+          completedAt,
+          paths,
+        });
+      } catch (error) {
+        gaps.push({
+          path: join(directory, name),
+          reason: error instanceof Error ? error.message : 'Invalid review artifact.',
+        });
+      }
+    });
+  });
+  return { reviews, gaps, scannedEntries, truncated };
 }
 
 function close(subscription: Subscription): void {
@@ -243,6 +332,23 @@ export function registerReviewSubscription(
   root: string,
   description = readFileSync(new URL('../prompts/review-subscribe.md', import.meta.url), 'utf8'),
 ): void {
+  pi.registerTool({
+    name: 'agentic_code_review_list',
+    label: 'List retained reviews',
+    description: readFileSync(new URL('../prompts/review-list.md', import.meta.url), 'utf8'),
+    parameters: Type.Object({
+      target: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
+    async execute(_id, { target, limit = 20 }, signal) {
+      signal?.throwIfAborted();
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid review listing limit.');
+      if (target !== undefined && (typeof target !== 'string' || !target || target.length > 4000))
+        throw new Error('Invalid review target filter.');
+      const details = retainedReviews(resolve(root), limit, target);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(details) }], details };
+    },
+  });
   const subscriptions = new Map<string, Subscription>();
   const clearAll = () => {
     for (const subscription of subscriptions.values()) close(subscription);
