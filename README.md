@@ -74,6 +74,12 @@ agentic_code_review({
 })
 ```
 
+To find a review from an earlier session, call `agentic_code_review_list({ target: "https://github.com/owner/repo/pull/7", limit: 20 })`, or omit `target` to list across retained sessions. The target filter is exact. Each result includes validated `reviewSessionId`, `runId`, `expectedTarget`, `expectedHead`, `recordedStatus`, timestamps (null when absent), and derived artifact paths. Read `paths.review` for the saved report; companion paths may be absent or invalid. Discovery does not require telemetry and returns no prompts, source, or findings.
+
+The list is read-only and does not start, resume, or subscribe to a review. `prepared` and `running` describe recorded state, not a live worker. Results follow filesystem order, not recency. `limit` defaults to 20, permits 1–100, and bounds reviews plus gaps; scanning also stops after 2,000 directory entries. `truncated` signals potentially incomplete coverage, even when a limit is reached exactly. Malformed, unreadable, or mismatched artifacts appear in `gaps`, including with a target filter. Completion markers and companion reports are not validated by discovery. There is no pagination in this first slice.
+
+For a relevant prepared/running review in another session, copy the four identity fields into `agentic_code_review_subscribe`. Completed or failed reviews cannot be subscribed; inspect their saved artifacts instead.
+
 When a review already runs in another Pi session, `agentic_code_review_subscribe` can register one bounded handoff using the exact review session ID, run ID, expected target, and expected head. It validates those saved artifacts but does not prove this session launched the review or that the caller's relevance decision is correct. Reviews started by `/code-review` already have a native watcher in the invoking session. Missing, malformed, failed, or timed-out artifacts send a failure handoff, not a review result.
 
 For a pull request URL the review session first pulls the PR itself through the provider's CLI (`gh` for github.com, `gs` for Meteorite), read-only: the description becomes a requirement source, existing review threads and bot comments become evidence to reconcile rather than repeat, and CI becomes a process condition. The [PR context contract](prompts/pr-context.md) has the commands and record shapes.

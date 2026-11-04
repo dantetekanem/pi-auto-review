@@ -158,6 +158,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_complete',
     'agentic_code_review_execute_experiment',
     'agentic_code_review_export_telemetry',
+    'agentic_code_review_list',
     'agentic_code_review_next_action',
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
