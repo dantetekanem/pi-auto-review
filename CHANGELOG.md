@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- An optional `settings.json` in the auto-review directory sets the default review `model` and `thinking` for the tool and `/code-review`. Explicit tool arguments still win. A malformed file or unsupported value stops the review before any artifact is written.
+
+### Changed
+
+- The review session takes fewer serial turns. Timestamps ride along with real calls, each stage's map records go in one write, one evidence record covers all PR threads, the final review JSON is written in one pass, and learning is composed in one save call. Saved files are read back only after a tool reports an error.
+- Collectors read only their contract and the pack. The invoking agent reads the review and bug files and opens map records only for claims its report cites. The completion summary is two to four sentences; the saved review is the handoff.
+- `agentic_code_review_complete` reports every review JSON problem and every malformed map line in one error, without echoing artifact content. It also seals the bug file after its checks pass, so the review session no longer edits it.
+
+### Fixed
+
+- A new review pane that reports `agent_pane_busy` is retried in place instead of failing over to a headless run.
+- The headless fallback stops when the tool call is aborted and reruns only a failure from its first minute. The launch receipt states why the visible pane failed.
+
 ## 0.7.1 (2026-10-31)
 
 ### Fixed

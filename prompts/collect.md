@@ -1,6 +1,6 @@
 Use only the review instructions, stage prompts, and context supplied by `pi-auto-review`. Do not read other skills unless the user explicitly requests them in this session.
 
-Your mission header lists the paths of this file, `taste.md`, `craft.md`, `voice.md` and `presentation.md`. Read them from those paths. If a path is missing, call `agentic_code_review_read_prompt` with the prompt name. Never run `find`, `ls` or a search to locate them.
+Your mission lists the path of this file and the pack; with no pack it also lists `taste.md`. Read them from those paths. If a prompt path is missing, call `agentic_code_review_read_prompt` with the prompt name. Never run `find`, `ls` or a search to locate them.
 
 # Collect
 
@@ -23,11 +23,11 @@ Reuse the depth-3 scan for changed Ruby/JS/TS methods or scopes it already expan
 
 For each coherent behavior, record its zone, paths and symbols, requirement IDs, current contract, changed behavior, relevant tests, direct callers/callees and other known dependencies. List the concrete checks needed before judging it. Keep an unrelated-looking change visible and ask what requirement justifies it within your report.
 
-Record leads from the supplied `taste.md` as hypotheses on each unit: optional booleans and inputs, stubs that hide behavior, rules living away from their owner, positive-only tests, writes without a transaction, names that contradict the flow, repeated lookups, mixed responsibilities and hidden dependencies. State the possible consequence and what deeper inspection would settle it. A match is a lead, not proof of a defect.
+In the inventory shape, record leads from the supplied `taste.md` as hypotheses on each unit: optional booleans and inputs, stubs that hide behavior, rules living away from their owner, positive-only tests, writes without a transaction, names that contradict the flow, repeated lookups, mixed responsibilities and hidden dependencies. State the possible consequence and what deeper inspection would settle it. A match is a lead, not proof of a defect.
 
 ## Hand off
 
-Return records compatible with the artifact contract. Add a short humanReadable handoff, written under the supplied `voice.md`, and available source-linked reviewer provenance under the presentation contract. Use rating: null for collection, not a readiness verdict; any submitted finding has its own A–F rating and short humanReadable field. Include exact source locations, what you inspected, what was unavailable, and which questions need deeper tracing. Cite source revision and distinguish facts from hypotheses. Do not copy whole files or secrets into the report.
+Return records compatible with the artifact contract. Add a short humanReadable handoff of what you found and what the next stage still needs, and your `reviewer` provenance as `{ model, thinkingLevel }`: this session's model and thinking level from its runtime metadata, null when unavailable, never a configured tier or another agent's identity. A finding you submit needs its own `rating` on the A–F scale in the append tool's description. Write every sentence a person will read, including a finding's `title` and `humanReadable`, as you would say it to a colleague at their desk: plain words, names from the code, what they would see go wrong first. Use rating: null for collection, not a readiness verdict; any submitted finding has its own A–F rating and short humanReadable field. Include exact source locations, what you inspected, what was unavailable, and which questions need deeper tracing. Cite source revision and distinguish facts from hypotheses. Do not copy whole files or secrets into the report.
 
 The top-level review session appends accepted records to the map. Do not edit shared review artifacts. If source evidence already confirms a bug, submit it through `agentic_code_review_append_finding` using the supplied session/run IDs, criterion/unit/source links and concrete evidence; return its generated ID. Use `fix` or `nit` only for useful nonblocking suggestions. Keep hypotheses in your report, not the bug handoff. If submission is unavailable or fails, report the missing persistence without a file-edit fallback.
 
