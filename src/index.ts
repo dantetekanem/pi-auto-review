@@ -535,7 +535,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       let reviewSession;
       let paneFailure = '';
       try {
-        reviewSession = await launchReviewPane(pi, ctx, { name: run.details.reviewSession.name, missionPath: run.details.paths.mission, preflight }, clock);
+        reviewSession = await launchReviewPane(pi, ctx, { name: run.details.reviewSession.name, missionPath: run.details.paths.mission, preflight }, signal, clock);
       } catch (error) {
         paneFailure = (error instanceof Error ? error.message : String(error)).split('\n', 1)[0]!.slice(0, 200);
         reviewSession = await runHeadlessReview(pi, { name: `${run.details.reviewSession.name}-headless`, missionPath: run.details.paths.mission, preflight }, signal, clock);

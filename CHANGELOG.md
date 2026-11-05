@@ -4,7 +4,7 @@
 
 ### Added
 
-- An optional `settings.json` in the auto-review directory sets the default review `model` and `thinking` for the tool and `/code-review`. Explicit tool arguments still win. A malformed file or unsupported value stops the review before any artifact is written.
+- An optional `settings.json` in the auto-review directory sets the default review `model` and `thinking` for the tool and `/code-review`. Explicit tool arguments still win. A malformed file, an unknown key or an unsupported value stops the review before any artifact is written, and the error names the file. `agentic_code_review_list` skips the file.
 
 ### Changed
 
@@ -15,7 +15,8 @@
 ### Fixed
 
 - A new review pane that reports `agent_pane_busy` is retried in place instead of failing over to a headless run.
-- The headless fallback stops when the tool call is aborted and reruns only a failure from its first minute. The launch receipt states why the visible pane failed.
+- An abort stops the busy-pane waits and the headless fallback, whatever exit code the headless child reports. The fallback reruns only a failure from its first minute, and a later failure says how long the run lasted. The launch receipt states why the visible pane failed.
+- `timing` ends at `completedAt`, and the report takes the full run time from `telemetry.durationMs`, so learning and completion are no longer missing from the total.
 
 ## 0.7.1 (2026-10-31)
 

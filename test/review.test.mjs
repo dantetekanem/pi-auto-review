@@ -386,6 +386,31 @@ test('explicit model and thinking arguments beat the settings file field by fiel
   const mixed = await thinkingOnly.tool('', undefined, { thinking: 'medium' });
   assert.equal(mixed.details.preflight.model, 'vendor-a/configured');
   assert.equal(mixed.details.preflight.thinking, 'medium');
+
+  const unused = createReviewFixture(t, 'explicit-failure');
+  writeSettings(unused, { thinking: 'low' });
+  const failure = await unused.tool('', undefined, { model: 'missing/model', thinking: 'medium' }).then(() => undefined, caught => caught);
+  assert.match(failure.message, /unavailable or unregistered\.$/);
+});
+
+test('a clean /code-review adopts the settings level, and a dirty caller keeps its own', async t => {
+  const clean = createReviewFixture(t, 'settings-clean');
+  writeSettings(clean, { thinking: 'low' });
+  await clean.command('');
+  assert.deepEqual(clean.modelChanges, []);
+  assert.deepEqual(clean.thinkingChanges, ['low']);
+  assert.match(clean.messages[0].message.content, /\(set thinking low\)/);
+  assert.equal(clean.userMessages.length, 1);
+
+  const dirty = createReviewFixture(t, 'settings-dirty');
+  writeSettings(dirty, { thinking: 'low' });
+  dirty.ctx.sessionManager.getBranch = () => [{ type: 'message', message: { role: 'user', content: 'Earlier work.' } }];
+  await dirty.command('');
+  const start = call(dirty, 'herdr', ['agent', 'start']);
+  const level = start.args.indexOf('--thinking');
+  assert.deepEqual(start.args.slice(level, level + 2), ['--thinking', 'low']);
+  assert.deepEqual(dirty.modelChanges, []);
+  assert.deepEqual(dirty.thinkingChanges, []);
 });
 
 test('malformed or unsupported settings fail before artifacts or launch', async t => {
@@ -394,8 +419,9 @@ test('malformed or unsupported settings fail before artifacts or launch', async 
     ['[]', /must be a JSON object/],
     [{ model: 'no-slash' }, /provider\/id/],
     [{ thinking: 'extreme' }, /one of off, minimal/],
-    [{ model: 'vendor-a/missing' }, /unavailable or unregistered/],
-    [{ model: 'vendor-a/configured', thinking: 'xhigh' }, /does not support xhigh/],
+    [{ model: 'vendor-a/missing' }, /unavailable or unregistered\. The model or thinking level came from .*settings\.json\./],
+    [{ model: 'vendor-a/configured', thinking: 'xhigh' }, /does not support xhigh\. The model or thinking level came from .*settings\.json\./],
+    [{ thinkng: 'low' }, /unknown keys: thinkng\./],
   ];
   for (const [index, [contents, pattern]] of cases.entries()) {
     const harness = createReviewFixture(t, `settings-${index}`);
@@ -467,24 +493,47 @@ test('headless review is rerun only after an early failure and receives the abor
     }
     return lateFallback(command, args, options);
   };
-  await assert.rejects(late.tool(), /crashed mid-review/);
+  await assert.rejects(late.tool(), /failed after 61 s: crashed mid-review/);
   assert.equal(late.execCalls.filter(item => item.command === 'pi').length, 1);
 });
 
-test('an abort during a failed first headless run skips the retry and rejects', async t => {
-  const harness = createReviewFixture(t, 'abort-headless', stepClock());
-  const fallback = harness.behavior.execute.bind(harness.behavior);
+test('an abort during the first headless run rejects whatever exit code comes back', async t => {
+  const exits = [{ code: 1, stdout: '', stderr: 'startup failed' }, { code: 0, stdout: '', stderr: '', killed: true }];
+  for (const [index, exit] of exits.entries()) {
+    const harness = createReviewFixture(t, `abort-headless-${index}`, stepClock());
+    const fallback = harness.behavior.execute.bind(harness.behavior);
+    const controller = new AbortController();
+    harness.behavior.execute = (command, args, options) => {
+      if (command === 'herdr') return { code: 1, stdout: '', stderr: 'pane unavailable' };
+      if (command === 'pi') {
+        controller.abort();
+        return exit;
+      }
+      return fallback(command, args, options);
+    };
+    await assert.rejects(harness.tool('', controller.signal), /abort/i);
+    assert.equal(harness.execCalls.filter(item => item.command === 'pi').length, 1);
+  }
+});
+
+test('an abort during a busy-pane wait stops before another start or a recovery pane', async t => {
   const controller = new AbortController();
-  harness.behavior.execute = (command, args, options) => {
-    if (command === 'herdr') return { code: 1, stdout: '', stderr: 'pane unavailable' };
-    if (command === 'pi') {
-      controller.abort();
-      return { code: 1, stdout: '', stderr: 'startup failed' };
-    }
-    return fallback(command, args, options);
-  };
+  const clock = { ...stepClock(), sleep(ms) {
+    this.sleeps.push(ms);
+    controller.abort();
+    return Promise.resolve();
+  } };
+  const harness = createReviewFixture(t, 'abort-busy', clock);
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  harness.behavior.execute = (command, args, options) => command === 'herdr' && args[0] === 'agent' && args[1] === 'start'
+    ? { code: 1, stdout: '', stderr: 'agent_pane_busy' }
+    : fallback(command, args, options);
   await assert.rejects(harness.tool('', controller.signal), /abort/i);
-  assert.equal(harness.execCalls.filter(item => item.command === 'pi').length, 1);
+  const herdr = (...prefix) => harness.execCalls.filter(item => item.command === 'herdr' && prefix.every((value, index) => item.args[index] === value));
+  assert.equal(herdr('pane', 'split').length, 1);
+  assert.equal(herdr('agent', 'start').length, 1);
+  assert.deepEqual(herdr('pane', 'close').map(item => item.args[2]), ['w1:p2']);
+  assert.equal(harness.execCalls.some(item => item.command === 'pi'), false);
 });
 
 test('every busy start attempt closes the pane it split', async t => {

@@ -105,9 +105,9 @@ function supportsThinking(model: ReviewModel, thinking: ReviewThinking): boolean
   return true;
 }
 
-function withSettings(historyRoot: string, selection?: ReviewSelection): ReviewSelection | undefined {
+function withSettings(historyRoot: string, selection?: ReviewSelection): { selection?: ReviewSelection; source?: string } {
   const path = `${historyRoot}/settings.json`;
-  if (!existsSync(path)) return selection;
+  if (!existsSync(path)) return { selection };
   let settings: unknown;
   try {
     settings = JSON.parse(readFileSync(path, 'utf8'));
@@ -115,6 +115,8 @@ function withSettings(historyRoot: string, selection?: ReviewSelection): ReviewS
     throw new Error(`Auto-review settings ${path} are unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error(`Auto-review settings ${path} must be a JSON object.`);
+  const unknown = Object.keys(settings).filter(key => key !== 'model' && key !== 'thinking');
+  if (unknown.length) throw new Error(`Auto-review settings ${path} have unknown keys: ${unknown.join(', ')}.`);
   const { model, thinking } = settings as Record<string, unknown>;
   if (model !== undefined && (typeof model !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(model))) {
     throw new Error(`Auto-review settings ${path} need "model" as provider/id.`);
@@ -122,8 +124,12 @@ function withSettings(historyRoot: string, selection?: ReviewSelection): ReviewS
   if (thinking !== undefined && (typeof thinking !== 'string' || !(THINKING_LEVELS as readonly string[]).includes(thinking))) {
     throw new Error(`Auto-review settings ${path} need "thinking" as one of ${THINKING_LEVELS.join(', ')}.`);
   }
-  const merged = { model: selection?.model ?? model, thinking: selection?.thinking ?? thinking as ReviewThinking | undefined };
-  return merged.model === undefined && merged.thinking === undefined ? undefined : merged;
+  const merged = { model: selection?.model ?? model as string | undefined, thinking: selection?.thinking ?? thinking as ReviewThinking | undefined };
+  const used = (selection?.model === undefined && model !== undefined) || (selection?.thinking === undefined && thinking !== undefined);
+  return {
+    selection: merged.model === undefined && merged.thinking === undefined ? undefined : merged,
+    source: used ? path : undefined,
+  };
 }
 
 async function modelFor(ctx: ExtensionContext, selection?: ReviewSelection): Promise<{ spec: string; thinking: ReviewThinking }> {
@@ -210,7 +216,11 @@ export async function preflightReview(
   selection?: ReviewSelection,
 ): Promise<ReviewPreflight> {
   const started = Date.now();
-  const selected = await modelFor(ctx, withSettings(historyRoot, selection));
+  const settings = withSettings(historyRoot, selection);
+  const selected = await modelFor(ctx, settings.selection).catch((error: unknown) => {
+    if (!settings.source || !(error instanceof Error)) throw error;
+    throw new Error(`${error.message} The model or thinking level came from ${settings.source}.`);
+  });
   const meteorite = context.match(/https?:\/\/(?:meteorite|gitstream)\.shopify\.io\/repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)/i);
   if (meteorite) {
     const number = Number(meteorite[3]);
@@ -368,6 +378,7 @@ export async function launchReviewPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   input: { name: string; missionPath: string; preflight: ReviewPreflight },
+  signal?: AbortSignal,
   clock: ReviewClock = systemClock,
 ): Promise<{ name: string; paneId: string; model: string; thinking: ReviewThinking }> {
   if (process.env.HERDR_ENV !== '1' || !process.env.HERDR_PANE_ID) {
@@ -378,6 +389,7 @@ export async function launchReviewPane(
   const layout = parseJson(layoutResult, 'herdr pane layout');
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    signal?.throwIfAborted();
     const name = attempt === 0 ? input.name : `${input.name}-recovery`;
     const split = await checked(pi, 'herdr', [
       'pane', 'split', '--pane', paneId, '--direction', direction(layout, paneId), '--ratio', '0.5', '--cwd', input.preflight.checkout, '--no-focus',
@@ -397,6 +409,7 @@ export async function launchReviewPane(
         } catch (error) {
           if (busy >= PANE_BUSY_RETRIES || !String(error instanceof Error ? error.message : error).includes('agent_pane_busy')) throw error;
           await clock.sleep(PANE_BUSY_WAIT_MS);
+          signal?.throwIfAborted();
         }
       }
       started = true;
@@ -429,10 +442,13 @@ export async function runHeadlessReview(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const started = clock.now();
     const result = await pi.exec('pi', args, { signal }).catch(cause => ({ code: 1, stdout: '', stderr: cause instanceof Error ? cause.message : String(cause) }));
+    signal?.throwIfAborted();
     if (result.code === 0) return { name: input.name, paneId: 'headless', model: input.preflight.model, thinking: input.preflight.thinking };
     error = result.stderr || result.stdout;
-    signal?.throwIfAborted();
-    if (clock.now() - started >= HEADLESS_RETRY_WINDOW_MS) break;
+    const elapsed = clock.now() - started;
+    if (elapsed >= HEADLESS_RETRY_WINDOW_MS) {
+      throw new Error(`The headless review session failed after ${Math.round(elapsed / 1000)} s: ${error.slice(0, 1000)}`);
+    }
   }
   throw new Error(`The visible and headless review sessions could not start: ${error.slice(0, 1000)}`);
 }
