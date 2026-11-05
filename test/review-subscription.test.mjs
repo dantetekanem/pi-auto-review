@@ -134,6 +134,15 @@ test('discovers recorded states without telemetry or writes and supplies subscri
   assert.equal(harness.probe(harness.sessionFile).status, 'waiting');
 });
 
+test('skips the auto-review settings file in the history root', async (t) => {
+  const harness = fixture(t);
+  harness.writeReview('reviewer');
+  writeFileSync(join(harness.root, 'settings.json'), JSON.stringify({ thinking: 'high' }));
+  const { details } = await harness.discover();
+  assert.deepEqual(details.gaps, []);
+  assert.deepEqual(details.reviews.map((r) => r.reviewSessionId), ['reviewer']);
+});
+
 test('lists an absent root without creating it and reports invalid roots', async (t) => {
   const harness = fixture(t);
   assert.deepEqual((await harness.discover()).details.reviews, []);

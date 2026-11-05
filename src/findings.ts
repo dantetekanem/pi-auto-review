@@ -9,6 +9,7 @@ const readPrompt = () => readFileSync(new URL('../prompts/finding.md', import.me
 const sessionPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const runPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const kinds = ['bug', 'fix', 'nit', 'question'] as const;
+export const OPEN_BUG_STATUSES: readonly string[] = ['prepared', 'running', 'queued'];
 const lenses = [
   'ownership',
   'naming',
@@ -227,7 +228,7 @@ export function registerFindings(pi: ExtensionAPI, root: string): void {
         ) {
           throw new Error('Prepared bugs envelope does not match invocation.');
         }
-        if (!['prepared', 'running', 'queued'].includes(String(envelope.status))) {
+        if (!OPEN_BUG_STATUSES.includes(String(envelope.status))) {
           throw new Error('Prepared bugs envelope is sealed.');
         }
         if (envelope.findings !== undefined && !Array.isArray(envelope.findings)) {

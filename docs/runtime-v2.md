@@ -40,7 +40,7 @@ Call `spawn_swarm_agents` from pi-extended-teams once with:
 - at most two `read-review` lanes;
 - at most one `read-collect` lane for a closed list of criterion-bearing gaps, including the manual vicinity (callers, tests, sibling definitions) for `file:` sections the scan marked `no parser`;
 - `model_slot` per lane; the configured tiers run both at `medium`;
-- a fixed header per lane: run-local paths of its contract, `taste.md`, `craft.md`, `voice.md`, `pr-comments.md` and `presentation.md` from `review.json.prompts`, the session/run IDs, repository, revision and pack path;
+- a fixed header per lane: for a reviewer, run-local paths of `review-zone.md`, `taste.md`, `craft.md`, `voice.md`, `pr-comments.md` and `presentation.md` from `review.json.prompts`; for a collector, `collect.md` only (plus `taste.md` without a pack); then the session/run IDs, repository, revision and pack path;
 - exact unit IDs, pack section ranges and assigned questions;
 - `defaults.cwd` set to the reviewed checkout.
 
