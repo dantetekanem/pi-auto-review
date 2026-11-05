@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The reservation-model checker enforces a check contract. `formal/ReservationOwnership.checks` lists safe, mutant, control and counterexample checks, and each check runs in its own TLC configuration. A model with no control, or with a safeguard that no mutant turns off, is refused before anything runs. `verifyReservationModel` reports `contract-verified` only when every check passes. Host plans also pin `checks`, and `runReservationCheck` takes a check index instead of a mutation name.
+- `ReservationOwnership.tla` uses boolean safeguards instead of one `Mutation` string. Before, `NoUnjustifiedReacquisition` still held when a late or unconfirmed result settled a token. The history now records such a settle as `unconfirmed-settle`, so the `SettleNeedsConfirmation` mutant breaks the rule.
+
 ## 0.7.1 (2026-10-31)
 
 ### Fixed

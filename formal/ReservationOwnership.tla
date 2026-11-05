@@ -1,13 +1,15 @@
 ---------------------- MODULE ReservationOwnership ----------------------
 EXTENDS Naturals, Sequences, FiniteSets
-CONSTANT Mutation
+\* GrantLimit bounds fresh tokens per key. Each other constant is a safeguard:
+\* TRUE in every configuration except the mutant check that turns it off.
+CONSTANTS GrantLimit, ActiveBlocksGrant, ReplayMustMatch, SettleNeedsConfirmation
 Keys == {"k1", "k2"}
 Callers == {"c1", "c2"}
-Tokens == 1..3
-Foreign == 4
+Tokens == 1..GrantLimit
+Foreign == GrantLimit + 1
 Clocks == 0..3
 Deadlines == 1..2
-Kinds == {"grant", "settle", "fence"}
+Kinds == {"grant", "settle", "unconfirmed-settle", "fence"}
 States == {"unused", "active", "settled", "fenced"}
 VARIABLES clock, fresh, latest, state, expiry, history
 vars == <<clock, fresh, latest, state, expiry, history>>
@@ -33,10 +35,10 @@ ReplayMatches(k, r) ==
   ELSE IF state[k][latest[k]] = "settled" THEN r = latest[k]
   ELSE r = 0
 Reserve(k, c, d, r) ==
-  /\ fresh[k] < 3
+  /\ fresh[k] < GrantLimit
   /\ clock < d
-  /\ (Mutation = "allow-active" \/ Admissible(k))
-  /\ (Mutation = "ignore-replay" \/ ReplayMatches(k, r))
+  /\ (~ActiveBlocksGrant \/ Admissible(k))
+  /\ (~ReplayMustMatch \/ ReplayMatches(k, r))
   /\ LET n == fresh[k] + 1 IN
        /\ fresh' = [fresh EXCEPT ![k] = n]
        /\ latest' = [latest EXCEPT ![k] = n]
@@ -46,14 +48,17 @@ Reserve(k, c, d, r) ==
   /\ UNCHANGED clock
 
 \* All callers may hold aliases; caller identity grants no authority.
+\* Only the SettleNeedsConfirmation mutant can record an unconfirmed-settle.
 Settle(k, n, outcome) ==
   /\ state[k][n] = "active"
   /\ latest[k] = n
-  /\ LET success == clock < expiry[k][n] /\ outcome = "confirmed"
+  /\ LET confirmed == clock < expiry[k][n] /\ outcome = "confirmed"
+         success == confirmed \/ ~SettleNeedsConfirmation
      IN /\ state' = [state EXCEPT ![k][n] =
                          IF success THEN "settled" ELSE "fenced"]
-        /\ history' = RecordEvent(k, IF success THEN "settle" ELSE "fence",
-                                   n, 0, "c1")
+        /\ history' = RecordEvent(k, IF confirmed THEN "settle"
+                                     ELSE IF success THEN "unconfirmed-settle"
+                                     ELSE "fence", n, 0, "c1")
   /\ UNCHANGED <<clock, fresh, latest, expiry>>
 Fence(k, n) ==
   /\ state[k][n] = "active"
@@ -68,7 +73,7 @@ MoveClock(t) ==
   /\ clock' = t
   /\ UNCHANGED <<fresh, latest, state, expiry, history>>
 Next ==
-  \/ \E k \in Keys, c \in Callers, d \in Deadlines, r \in 0..3:
+  \/ \E k \in Keys, c \in Callers, d \in Deadlines, r \in 0..GrantLimit:
        Reserve(k, c, d, r)
   \/ \E k \in Keys, n \in Tokens,
         outcome \in {"confirmed", "unconfirmed", "invalid-attempt"}:
@@ -76,17 +81,19 @@ Next ==
   \/ \E k \in Keys, n \in Tokens: Fence(k, n)
   \/ \E k \in Keys, n \in Tokens \cup {Foreign}: RejectToken(k, n)
   \/ \E t \in Clocks: MoveClock(t)
+Spec == Init /\ [][Next]_vars
 
 TypeOK ==
-  /\ Mutation \in {"none", "allow-active", "ignore-replay"}
+  /\ GrantLimit \in Nat \ {0}
+  /\ {ActiveBlocksGrant, ReplayMustMatch, SettleNeedsConfirmation} \subseteq BOOLEAN
   /\ clock \in Clocks
-  /\ fresh \in [Keys -> 0..3]
-  /\ latest \in [Keys -> 0..3]
+  /\ fresh \in [Keys -> 0..GrantLimit]
+  /\ latest \in [Keys -> 0..GrantLimit]
   /\ state \in [Keys -> [Tokens -> States]]
   /\ expiry \in [Keys -> [Tokens -> 0..2]]
   /\ history \in [Keys -> Seq([kind: Kinds, token: Tokens,
-                               replay: 0..3, caller: Callers])]
-  /\ \A k \in Keys: Len(history[k]) <= 6
+                               replay: 0..GrantLimit, caller: Callers])]
+  /\ \A k \in Keys: Len(history[k]) <= 2 * GrantLimit
 
 \* Prefix-derived evidence never consults latest/state admission slots.
 Grants(h, i) == {j \in 1..i : h[j].kind = "grant"}
@@ -106,4 +113,10 @@ NoUnjustifiedReacquisition ==
       /\ \A i \in Grants(h, Len(h)): Justified(h, i)
       /\ \A i \in 1..Len(h): h[i].kind = "fence" =>
            \A j \in (i + 1)..Len(h): h[j].kind # "grant"
+
+\* Controls: the checker must violate each one, so the rule's states are reachable.
+NeverReacquired ==
+  \A k \in Keys: Cardinality(Grants(history[k], Len(history[k]))) <= 1
+NeverFenced ==
+  \A k \in Keys: \A i \in 1..Len(history[k]): history[k][i].kind # "fence"
 =============================================================================

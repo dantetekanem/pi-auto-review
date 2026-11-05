@@ -21,9 +21,9 @@
     "Synchronous direct calls on one JavaScript agent are atomic; no method replacement, subclass overrides, hostile accessors, reentrant callbacks or concurrent shared instance.",
     "Result objects are ordinary plain data. Failed settlement consumes its token and fences before returning failure; late, unconfirmed and invalid-ID outcomes cannot settle successfully.",
     "Rejecting foreign/stale/duplicate token operations and invalid reserve inputs may stutter without logs; explicit fence, successful settlement and failed settlement remain separate operations.",
-    "History records successful grants and terminal token outcomes per key independently of admission slots; caller-neutral terminal events use c1 as a canonical label.",
+    "History records successful grants and terminal token outcomes per key independently of admission slots; caller-neutral terminal events use c1 as a canonical label. The baseline fences a settle without a confirmed, on-time result; only the SettleNeedsConfirmation mutant records it as unconfirmed-settle.",
     "Host independently retains execution authority. cleanupConfirmed is an input label, not verified cleanup. No await occurs within a modeled operation.",
-    "Mutation is a model-only sensitivity control: none is baseline; allow-active bypasses active/fenced admission; ignore-replay bypasses replay matching. Replay matching for an unsettled predecessor accepts only the absent label, with admission normally rejecting it.",
+    "ActiveBlocksGrant, ReplayMustMatch and SettleNeedsConfirmation are model-only safeguards: TRUE in every configuration except the mutant check that turns one off. A mutant is a sensitivity control, not TypeScript behavior. Replay matching for an unsettled predecessor accepts only the absent label, with admission normally rejecting it.",
     "TLC finite-state exploration, its implementation, fingerprinting and the handwritten abstraction are trusted; no refinement relation or TypeScript semantics frontend is supplied."
   ],
   "exclusions": [
