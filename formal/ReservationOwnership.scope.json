@@ -24,7 +24,7 @@
     "History records successful grants and terminal token outcomes per key independently of admission slots; caller-neutral terminal events use c1 as a canonical label. The baseline fences a settle without a confirmed, on-time result; only the SettleNeedsConfirmation mutant records it as unconfirmed-settle.",
     "Host independently retains execution authority. cleanupConfirmed is an input label, not verified cleanup. No await occurs within a modeled operation.",
     "ActiveBlocksGrant, ReplayMustMatch and SettleNeedsConfirmation are model-only safeguards: TRUE in every configuration except the mutant check that turns one off. A mutant is a sensitivity control, not TypeScript behavior. Replay matching for an unsettled predecessor accepts only the absent label, with admission normally rejecting it.",
-    "TLC finite-state exploration, its implementation, fingerprinting and the handwritten abstraction are trusted; no refinement relation or TypeScript semantics frontend is supplied."
+    "tla-ts 0.0.3 single-worker exploration, which keeps every reached state and compares states exactly, its implementation and the handwritten abstraction are trusted; no refinement relation or TypeScript semantics frontend is supplied."
   ],
   "exclusions": [
     "TypeScript proof, code-linked proof, refinement, all JavaScript numeric values, NaN, coercion, floating-point arithmetic and throwing clocks.",

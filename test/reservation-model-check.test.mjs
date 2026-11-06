@@ -1,100 +1,83 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { interpretTlc, runtimeIdentity, prepareReservationCheck, runReservationCheck, readReservationCheck, verifyReservationModel } from '../src/reservation-model-check.ts';
+import { interpretCheck, directoryIdentity, prepareReservationCheck, runReservationCheck, readReservationCheck, verifyReservationModel } from '../src/reservation-model-check.ts';
 import { planModelChecks } from '../src/model-check-contract.ts';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const frame = (id, body, level = 0) => `@!@!@STARTMSG ${id}:${level} @!@!@\n${body}\n@!@!@ENDMSG ${id} @!@!@\n`;
-const start = frame(2187, 'Running breadth-first search Model-Checking with 1 worker') + frame(2185, 'Starting...');
-const initialized = frame(2190, 'Finished computing initial states: 1 distinct state generated at now.');
-const stats = frame(2199, '12 states generated, 5 distinct states found, 0 states left on queue.');
-const finished = frame(2186, 'Finished in 1s');
-const success = start + initialized + frame(2193, 'Model checking completed. No error has been found.') + stats + finished;
-const violation = start + initialized + frame(2110, 'Invariant NoUnjustifiedReacquisition is violated.', 1)
-  + frame(2121, 'The behavior up to this point is:', 1) + frame(2217, '1: <Initial predicate>\nhistory = <<>>', 4) + stats + finished;
-const observed = (stdout = success, exitCode = 0) => ({ status: 'completed', exitCode, stdout, stderr: '' });
+const line = fields => `${JSON.stringify(fields)}\n`;
+const passed = { status: 'success', invariant: null, trace: 0, generated: 12, distinct: 5, queued: 0 };
+const broke = { status: 'invariant-violation', invariant: 'NoUnjustifiedReacquisition', trace: 2, generated: 12, distinct: 5, queued: 3 };
+const observed = (stdout = line(passed), exitCode = 0) => ({ status: 'completed', exitCode, stdout, stderr: '' });
 const bundled = name => readFileSync(new URL(`../formal/ReservationOwnership.${name}`, import.meta.url), 'utf8');
 const plannedChecks = planModelChecks(bundled('checks'), bundled('cfg'), bundled('tla')).length;
-const fixed = (output, exitCode = 0) => `process.stdout.write(${JSON.stringify(output)});\nprocess.exitCode=${exitCode};\n`;
+const success = { status: 'success', generatedStates: 12, distinctStates: 5, queuedStates: 0, depth: 3 };
+const returns = result => `export async function check() { return ${JSON.stringify(result)}; }\n`;
 // Breaks the named rule whenever a check turns a safeguard off or asks for a control, like a model that meets its contract.
-const meetsContract = `const config = readFileSync('ReservationOwnership.cfg', 'utf8');
-const rule = config.trim().split('\\n').at(-1).trim();
-const broken = config.includes('= FALSE') || rule.startsWith('Never');
-process.stdout.write(broken ? ${JSON.stringify(violation)}.replaceAll('NoUnjustifiedReacquisition', rule) : ${JSON.stringify(success)});
-process.exitCode = broken ? 12 : 0;
+const meetsContract = `export async function check({ config }) {
+  const rule = config.trim().split('\\n').at(-1).trim();
+  if (!config.includes('= FALSE') && !rule.startsWith('Never')) return ${JSON.stringify(success)};
+  return { status: 'invariant-violation', violation: { name: rule, trace: [{}, {}] }, generatedStates: 12, distinctStates: 5, queuedStates: 3, depth: 2 };
+}
 `;
 
-test('TLC completion requires complete finite exploration, not exit zero or success prose', () => {
-  assert.equal(interpretTlc(observed()).status, 'bounded-model-checked');
-  for (const output of [observed(''), observed('Model checking completed.'), observed(success.replace(stats, '')),
-    observed(success.replace(initialized, '')), observed(success.replace(finished, '')),
-    observed(success.replace('0 states left', '2 states left')), observed(success.replace('1 distinct state generated', '0 distinct state generated')),
-    observed(success + frame(2111, 'Evaluation failed', 1)), observed(success + frame(2188, 'Simulation')),
-    observed(finished + success.replace(finished, '')), observed(success.replace('with 1 worker', 'with 2 workers')),
-    observed(success.replace('1 distinct state generated', '9007199254740992 distinct states generated')),
-    { ...observed(), stderr: frame(2111, 'Evaluation failed', 1) },
-    observed(success.replace('@!@!@ENDMSG 2193', '@!@!@ENDMSG 9999')), observed(success, 1),
-    ...['timeout', 'cancelled', 'output_limit', 'process_error'].map(status => ({ ...observed(), status }))]) {
-    assert.equal(interpretTlc(output).status, 'unknown', JSON.stringify(output));
+test('a passing check needs one complete result line from a finished run', () => {
+  assert.deepEqual(interpretCheck(observed()), { status: 'bounded-model-checked', generated: 12, distinct: 5 });
+  for (const output of [observed(''), observed(JSON.stringify(passed)), observed(line(passed) + line(passed)), observed('{not json}\n'),
+    observed('Model checking completed. No error has been found.\n'), observed(line({ ...passed, queued: 2 })),
+    observed(line({ ...passed, distinct: 0, generated: 0 })), observed(line({ ...passed, generated: 4 })),
+    observed(line({ ...passed, distinct: 2 ** 53, generated: 2 ** 53 })), observed(line({ ...passed, distinct: 4.5 })),
+    observed(line({ ...passed, distinct: '5' })), observed(line({ ...passed, depth: 3 })), observed(line({ ...passed, queued: undefined })),
+    observed(line({ ...passed, status: 'deadlock' })), observed(line({ ...passed, status: 'error' })),
+    observed(line({ ...passed, invariant: 'TypeOK' })), observed(line(passed), 1),
+    ...['timeout', 'cancelled', 'output_limit', 'process_error', 'stale-input'].map(status => ({ ...observed(), status }))]) {
+    assert.equal(interpretCheck(output).status, 'unknown', JSON.stringify(output));
   }
 });
 
-test('the pinned non-semantic JVM GC advisory is retained without hiding other warnings', () => {
-  const advisory = frame(2401, 'Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.', 3);
-  const passed = interpretTlc(observed(advisory + success));
-  assert.equal(passed.status, 'bounded-model-checked');
-  assert.equal(passed.advisories[0].code, 2401);
-  assert.equal(interpretTlc(observed(advisory + violation, 12)).status, 'model-counterexample');
-  assert.equal(interpretTlc(observed(frame(2401, 'Different warning', 3) + success)).status, 'unknown');
-  assert.equal(interpretTlc(observed(frame(2402, 'Other warning', 3) + success)).status, 'unknown');
-});
-
-test('a model counterexample names its invariant and needs a finished trace', () => {
-  assert.equal(interpretTlc(observed(violation, 12)).invariant, 'NoUnjustifiedReacquisition');
-  assert.equal(interpretTlc(observed(violation.replace('NoUnjustifiedReacquisition', 'NeverFenced'), 12)).invariant, 'NeverFenced');
-  for (const stdout of [violation.replace('Invariant NoUnjustifiedReacquisition is violated.', 'Temporal properties were violated.'),
-    violation.replace(frame(2217, '1: <Initial predicate>\nhistory = <<>>', 4), ''), violation + frame(2193, 'No error')]) {
-    assert.equal(interpretTlc(observed(stdout, 12)).status, 'unknown');
+test('a model counterexample names its invariant and needs a trace', () => {
+  assert.deepEqual(interpretCheck(observed(line(broke))), { status: 'model-counterexample', invariant: 'NoUnjustifiedReacquisition' });
+  assert.equal(interpretCheck(observed(line({ ...broke, invariant: 'NeverFenced' }))).invariant, 'NeverFenced');
+  for (const fields of [{ ...broke, trace: 0 }, { ...broke, queued: -1 }, { ...broke, invariant: null }, { ...broke, invariant: 7 }, { ...broke, invariant: 'Two words' },
+    { ...broke, status: 'property-violation' }, { ...broke, status: 'liveness-violation' }]) {
+    assert.equal(interpretCheck(observed(line(fields))).status, 'unknown', JSON.stringify(fields));
   }
-  assert.equal(interpretTlc(observed(violation, 0)).status, 'unknown');
+  assert.equal(interpretCheck(observed(line(broke), 12)).status, 'unknown');
 });
 
-function fixture(t, program = fixed(success)) {
+function fixture(t, program = returns(success)) {
   const root = mkdtempSync(join(tmpdir(), 'reservation-model-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const runtime = join(root, 'runtime');
-  mkdirSync(runtime);
-  const java = join(runtime, 'java');
-  writeFileSync(java, `#!${process.execPath}\nimport { readFileSync, writeFileSync } from 'node:fs';\nwriteFileSync('invocation.json', JSON.stringify({args:process.argv.slice(2),env:process.env}));\n${program}`, { mode: 0o700 });
-  writeFileSync(join(runtime, 'package.json'), '{"type":"module"}');
+  const checker = join(root, 'tla-ts');
+  mkdirSync(join(checker, 'dist'), { recursive: true });
+  writeFileSync(join(checker, 'package.json'), JSON.stringify({ name: 'tla-ts', version: '0.0.3', type: 'module' }));
+  writeFileSync(join(checker, 'dist', 'index.js'), `import { writeFileSync } from 'node:fs';
+writeFileSync('invocation.json', JSON.stringify({ argv: process.argv.slice(1), execArgv: process.execArgv, env: process.env }));
+${program}`);
   const pin = path => ({ path, sha256: hash(readFileSync(path)) });
-  const files = { java: pin(java), time: pin('/usr/bin/time') };
+  const files = { node: pin(process.execPath), time: pin('/usr/bin/time') };
   for (const [key, path] of Object.entries({ model: 'formal/ReservationOwnership.tla', config: 'formal/ReservationOwnership.cfg',
     checks: 'formal/ReservationOwnership.checks', scope: 'formal/ReservationOwnership.scope.json', source: 'src/experiments-reservations.ts' })) {
     const copy = join(root, key);
     writeFileSync(copy, readFileSync(new URL('../' + path, import.meta.url)));
     files[key] = pin(copy);
   }
-  const jar = join(root, 'fake-checker.jar');
-  writeFileSync(jar, 'Synthetic checker; never TLC.');
-  files.jar = pin(jar);
   const plan = {
     approvedBy: 'focused-fake-checker-test',
     expiresAt: Date.now() + 60000,
     maxRuns: 2,
     outputDir: join(root, 'results'),
     files,
-    runtime: { path: runtime, sha256: runtimeIdentity(runtime) },
+    checker: { path: checker, sha256: directoryIdentity(checker) },
   };
   return { root, plan };
 }
 const mac = { skip: process.platform !== 'darwin' };
 
-test('host-pinned fake process produces revalidated model-only receipts and exact safe argv', mac, async t => {
+test('the pinned checker runs through the runner with exact arguments and a clean environment', mac, async t => {
   const f = fixture(t);
   const grant = prepareReservationCheck(f.plan);
   const reference = await runReservationCheck(grant);
@@ -109,9 +92,11 @@ test('host-pinned fake process produces revalidated model-only receipts and exac
   assert.equal(result.bounds.tokensPerKey, 3);
   assert.ok(result.execution.peakRssBytes > 0);
   const invocation = JSON.parse(readFileSync(join(reference.path, '..', 'invocation.json')));
-  assert.ok(invocation.args.includes('-Xmx128m'));
-  assert.deepEqual(invocation.args.slice(-6), ['-workers', '1', '-config', 'ReservationOwnership.cfg', '-tool', 'ReservationOwnership']);
-  assert.equal(invocation.env.JAVA_TOOL_OPTIONS, undefined);
+  assert.deepEqual(invocation.execArgv, ['--max-old-space-size=128']);
+  assert.ok(invocation.argv[0].endsWith(join('src', 'model-check-runner.mjs')));
+  assert.deepEqual(invocation.argv.slice(1), [join(f.plan.checker.path, 'dist', 'index.js'), 'ReservationOwnership']);
+  // CoreFoundation, which Node links on macOS, adds __CF_USER_TEXT_ENCODING inside the child itself.
+  assert.deepEqual(Object.keys(invocation.env).filter(key => key !== '__CF_USER_TEXT_ENCODING').sort(), ['HOME', 'LANG', 'LC_ALL', 'TMPDIR']);
   await runReservationCheck(grant, 2);
   await assert.rejects(runReservationCheck(grant), /budget/);
   await assert.rejects(runReservationCheck(prepareReservationCheck(f.plan)), /consumed/);
@@ -121,7 +106,8 @@ test('host-pinned fake process produces revalidated model-only receipts and exac
 
 test('authorization, input/assumption drift and unsupported options reject before launch', mac, async t => {
   const f = fixture(t);
-  for (const changes of [{ maxRuns: plannedChecks + 1 }, { maxRuns: '2' }, { flags: ['-simulate'] }, { environment: {} }, { expiresAt: 1 }]) {
+  for (const changes of [{ maxRuns: plannedChecks + 1 }, { maxRuns: '2' }, { flags: ['-simulate'] }, { environment: {} }, { expiresAt: 1 },
+    { files: { ...f.plan.files, node: f.plan.files.time } }]) {
     assert.throws(() => prepareReservationCheck({ ...f.plan, ...changes }));
   }
   const grant = prepareReservationCheck(f.plan);
@@ -132,10 +118,10 @@ test('authorization, input/assumption drift and unsupported options reject befor
   cancelled.abort();
   await assert.rejects(runReservationCheck(grant, 0, cancelled.signal));
   assert.equal(existsSync(f.plan.outputDir), false);
-  for (const key of ['model', 'config', 'checks', 'scope', 'source', 'jar', 'java']) {
-    const path = f.plan.files[key].path;
+  const entry = join(f.plan.checker.path, 'dist', 'index.js');
+  for (const path of [...['model', 'config', 'checks', 'scope', 'source'].map(key => f.plan.files[key].path), entry]) {
     const bytes = readFileSync(path);
-    writeFileSync(path, Buffer.concat([bytes, Buffer.from('\nchanged')]));
+    writeFileSync(path, Buffer.concat([bytes, Buffer.from('\n// changed')]));
     await assert.rejects(runReservationCheck(grant), /identity|pin/);
     writeFileSync(path, bytes);
   }
@@ -147,8 +133,35 @@ test('authorization, input/assumption drift and unsupported options reject befor
   assert.equal(existsSync(f.plan.outputDir), false);
 });
 
+test('an added, changed or linked file anywhere in the checker directory stops the run', mac, async t => {
+  const f = fixture(t);
+  const grant = prepareReservationCheck(f.plan);
+  const extra = join(f.plan.checker.path, 'dist', 'extra.js');
+  for (const [add, remove] of [[() => writeFileSync(extra, ''), () => rmSync(extra)], [() => symlinkSync('index.js', extra), () => rmSync(extra)],
+    [() => writeFileSync(join(f.plan.checker.path, 'README.md'), 'changed'), () => rmSync(join(f.plan.checker.path, 'README.md'))]]) {
+    add();
+    await assert.rejects(runReservationCheck(grant), /identity|pinned file/);
+    remove();
+  }
+  assert.equal(existsSync(f.plan.outputDir), false);
+
+  const late = fixture(t, `export async function check() { writeFileSync(new URL('./late.js', import.meta.url), ''); return ${JSON.stringify(success)}; }\n`);
+  const reference = await runReservationCheck(prepareReservationCheck(late.plan));
+  assert.equal(JSON.parse(readFileSync(reference.path)).execution.status, 'stale-input');
+  assert.throws(() => readReservationCheck(reference, late.plan), /identity/);
+});
+
+test('a checker package other than tla-ts 0.0.3 is refused even when the host pins it', mac, t => {
+  const f = fixture(t);
+  for (const manifest of [{ name: 'tla-ts', version: '0.0.4' }, { name: 'not-tla-ts', version: '0.0.3' }]) {
+    writeFileSync(join(f.plan.checker.path, 'package.json'), JSON.stringify({ ...manifest, type: 'module' }));
+    const checker = { path: f.plan.checker.path, sha256: directoryIdentity(f.plan.checker.path) };
+    assert.throws(() => prepareReservationCheck({ ...f.plan, checker }), /Unsupported model checker/, JSON.stringify(manifest));
+  }
+});
+
 test('process output limits and cancellation settle without a successful model result', mac, async t => {
-  const limited = fixture(t, fixed('x'.repeat(70000)));
+  const limited = fixture(t, `export async function check() { process.stdout.write('x'.repeat(70000)); return ${JSON.stringify(success)}; }\n`);
   const limitedReference = await runReservationCheck(prepareReservationCheck(limited.plan));
   assert.equal(readReservationCheck(limitedReference, limited.plan).execution.status, 'output_limit');
   assert.ok(readFileSync(join(limitedReference.path, '..', 'stdout.txt')).length <= 65536);
@@ -160,8 +173,12 @@ test('process output limits and cancellation settle without a successful model r
   assert.equal(result.status, 'unknown');
 });
 
-test('incomplete fake checker output remains unknown and receipt edits cannot elevate it', mac, async t => {
-  const f = fixture(t, fixed(start));
+test('incomplete or crashed checker output remains unknown and receipt edits cannot elevate it', mac, async t => {
+  const crashed = fixture(t, 'export async function check() { throw new Error("unsupported feature"); }\n');
+  const crash = readReservationCheck(await runReservationCheck(prepareReservationCheck(crashed.plan)), crashed.plan);
+  assert.equal(crash.status, 'unknown');
+  assert.notEqual(crash.execution.exitCode, 0);
+  const f = fixture(t, returns({ status: 'success' }));
   const reference = await runReservationCheck(prepareReservationCheck(f.plan));
   assert.equal(readReservationCheck(reference, f.plan).status, 'unknown');
   const receipt = JSON.parse(readFileSync(reference.path));
@@ -194,7 +211,7 @@ test('the model meets its check contract only when every planned check meets its
   assert.equal(failed.status, 'contract-failed');
   for (const result of failed.results) assert.equal(result.grade, result.check.kind === 'safe' ? 'pass' : 'fail');
 
-  const unfinished = fixture(t, fixed(start));
+  const unfinished = fixture(t, returns({ status: 'success' }));
   assert.equal((await verifyReservationModel(prepareReservationCheck({ ...unfinished.plan, maxRuns: plannedChecks }))).status, 'unknown');
 
   const short = fixture(t);
