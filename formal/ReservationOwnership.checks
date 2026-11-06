@@ -1,0 +1,10 @@
+# Two tokens per key keep the rule too.
+safe GrantLimit=2
+# Without it, a second grant opens while the first token is still active.
+mutant ActiveBlocksGrant NoUnjustifiedReacquisition
+# Without it, a grant can replay a token that never settled.
+mutant ReplayMustMatch NoUnjustifiedReacquisition
+# Without it, a late or unconfirmed result settles and justifies a new grant.
+mutant SettleNeedsConfirmation NoUnjustifiedReacquisition
+control NeverReacquired
+control NeverFenced
