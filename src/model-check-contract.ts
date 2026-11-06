@@ -29,7 +29,7 @@ function render({ specification, constants, invariants }: Config): string {
     'INVARIANTS', ...invariants.map(name => `    ${name}`), ''].join('\n');
 }
 
-/** One TLC configuration per check, after the unchanged config. Refuses a model with no control or an untested safeguard. */
+/** One model config per check, after the unchanged config. Refuses a model with no control or an untested safeguard. */
 export function planModelChecks(checksText: string, configText: string, moduleText: string): PlannedCheck[] {
   const base = parseConfig(configText);
   const rules = base.invariants.slice(1);
