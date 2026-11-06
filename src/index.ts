@@ -16,7 +16,7 @@ import {
   writeFileSync,
   type FSWatcher,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import timers from 'node:timers/promises';
 import { OPEN_BUG_STATUSES, registerFindings } from './findings.ts';
@@ -26,6 +26,8 @@ import { registerCodebaseLearning } from './codebase.ts';
 import { readCompletionEvidence } from './evidence-completion.ts';
 import { readMachineEvidence } from './evidence-receipts.ts';
 import { registerReviewSubscription } from './review-subscription.ts';
+import { removeTestWorkspace, verifyTestRuns } from './review-tests.ts';
+import { registerReviewTests } from './review-tests-tool.ts';
 import { registerTelemetry } from './telemetry.ts';
 import {
   completionFileName,
@@ -406,6 +408,19 @@ async function sealBugEnvelope(bugsPath: string): Promise<void> {
   });
 }
 
+/** Finding evidence that points into this run's test receipts must point at an indexed run. */
+function unindexedTestCitations(findings: unknown[], directory: string, runId: string, receipts: string[]): string[] {
+  const indexed = receipts.map(path => dirname(path));
+  return findings
+    .flatMap(item => Array.isArray((item as { evidence?: unknown } | null)?.evidence) ? (item as { evidence: unknown[] }).evidence : [])
+    .map(entry => (entry as { source?: unknown } | null)?.source)
+    .filter((source): source is string => typeof source === 'string' && source.includes(`${runId}.tests/`))
+    .filter(source => {
+      const path = resolve(directory, source);
+      return !indexed.some(run => path === run || path.startsWith(`${run}/`));
+    });
+}
+
 function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
   return ctx.sessionManager.getEntries().some(entry => entry.type === 'custom_message'
     && entry.customType === 'agentic-code-review-complete'
@@ -416,6 +431,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   registerFindings(pi, root);
   const availableFamilies = registerExperiments(pi, root);
   registerAdaptive(pi, root, availableFamilies);
+  registerReviewTests(pi, root);
   registerCodebaseLearning(pi, root);
   registerReviewSubscription(pi, root, readPrompt('review-subscribe'));
   const telemetry = registerTelemetry(pi, root);
@@ -457,7 +473,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       if (typeof (review as { completedAt?: unknown }).completedAt !== 'string') problems.push('Complete the review JSON: completedAt must be a timestamp string.');
       const finalReview = review as { findings?: unknown; commentDrafts?: unknown; executionReceipts?: unknown;
         evidenceGraph?: unknown; evidenceContext?: unknown; evidenceAssessment?: unknown;
-        machineClaims?: unknown; machineAssessment?: unknown; telemetry?: unknown };
+        machineClaims?: unknown; machineAssessment?: unknown; telemetry?: unknown; testRuns?: unknown };
       const findings = Array.isArray(finalReview.findings) ? finalReview.findings : [];
       const drafts = Array.isArray(finalReview.commentDrafts) ? finalReview.commentDrafts : [];
       const acceptedIds = findings.filter(item => item && typeof item === 'object' && (item as { state?: unknown }).state === 'accepted').map(item => (item as { id?: unknown }).id).filter((id): id is string => typeof id === 'string');
@@ -471,6 +487,11 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       const bugsPath = join(root, sessionId, `${runId}.bugs.json`);
       const bugEnvelope = readBugEnvelope(bugsPath);
       if (bugEnvelope === null) problems.push(`${runId}.bugs.json must be a JSON object.`);
+      const testRuns = verifyTestRuns(join(root, sessionId), runId);
+      problems.push(...testRuns.problems);
+      if (!testRuns.summary && finalReview.testRuns !== undefined) problems.push('Remove testRuns from the review JSON: completion writes it from the test-run index.');
+      const unindexed = unindexedTestCitations(findings, join(root, sessionId), runId, testRuns.summary?.receipts ?? []);
+      if (unindexed.length) problems.push(`Findings cite test runs that are not in ${runId}.tests.json: ${unindexed.slice(0, 5).join(', ')}.`);
       if (problems.length) throw new Error(`Review not completed; fix all of these and call completion again:\n- ${problems.join('\n- ')}`);
       const evidence = readCompletionEvidence(finalReview.evidenceGraph, mapPath, runId, finalReview.evidenceContext);
       const receipts = readExecutionReceipts(root, sessionId, runId);
@@ -486,6 +507,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       if (evidence) finalReview.evidenceAssessment = evidence;
       if (machine) finalReview.machineAssessment = machine;
       if (evidence || machine || receipts.length || finalReview.executionReceipts !== undefined) finalReview.executionReceipts = receipts;
+      if (testRuns.summary) finalReview.testRuns = testRuns.summary;
       const report = telemetry.finish(ctx, sessionId, runId);
       finalReview.telemetry = report;
       const tempReview = `${reviewPath}.${randomUUID()}.tmp`;
@@ -514,7 +536,9 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         try { writeFileSync(fd, encoded); } finally { closeSync(fd); }
         renameSync(temp, completePath);
       }
-      return { content: [{ type: 'text' as const, text: summary }], details: { ...marker, telemetry: report }, terminate: true };
+      let testWorkspaceKept: string | undefined;
+      try { removeTestWorkspace(join(root, sessionId), runId); } catch (error) { testWorkspaceKept = error instanceof Error ? error.message : String(error); }
+      return { content: [{ type: 'text' as const, text: summary }], details: { ...marker, telemetry: report, ...(testWorkspaceKept ? { testWorkspaceKept } : {}) }, terminate: true };
     },
   });
 

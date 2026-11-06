@@ -105,9 +105,13 @@ function supportsThinking(model: ReviewModel, thinking: ReviewThinking): boolean
   return true;
 }
 
-function withSettings(historyRoot: string, selection?: ReviewSelection): { selection?: ReviewSelection; source?: string } {
+export type TestSettings = { enabled: boolean; sandbox: boolean; maxRuns: number; timeoutSeconds: number };
+const TEST_DEFAULTS: TestSettings = { enabled: true, sandbox: true, maxRuns: 12, timeoutSeconds: 300 };
+const TEST_LIMITS = { maxRuns: [1, 40], timeoutSeconds: [10, 1800] } as const;
+
+function readSettings(historyRoot: string) {
   const path = `${historyRoot}/settings.json`;
-  if (!existsSync(path)) return { selection };
+  if (!existsSync(path)) return { path, model: undefined, thinking: undefined, tests: TEST_DEFAULTS };
   let settings: unknown;
   try {
     settings = JSON.parse(readFileSync(path, 'utf8'));
@@ -115,16 +119,39 @@ function withSettings(historyRoot: string, selection?: ReviewSelection): { selec
     throw new Error(`Auto-review settings ${path} are unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error(`Auto-review settings ${path} must be a JSON object.`);
-  const unknown = Object.keys(settings).filter(key => key !== 'model' && key !== 'thinking');
+  const unknown = Object.keys(settings).filter(key => key !== 'model' && key !== 'thinking' && key !== 'tests');
   if (unknown.length) throw new Error(`Auto-review settings ${path} have unknown keys: ${unknown.join(', ')}.`);
-  const { model, thinking } = settings as Record<string, unknown>;
+  const { model, thinking, tests = {} } = settings as Record<string, unknown>;
   if (model !== undefined && (typeof model !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(model))) {
     throw new Error(`Auto-review settings ${path} need "model" as provider/id.`);
   }
   if (thinking !== undefined && (typeof thinking !== 'string' || !(THINKING_LEVELS as readonly string[]).includes(thinking))) {
     throw new Error(`Auto-review settings ${path} need "thinking" as one of ${THINKING_LEVELS.join(', ')}.`);
   }
-  const merged = { model: selection?.model ?? model as string | undefined, thinking: selection?.thinking ?? thinking as ReviewThinking | undefined };
+  if (!tests || typeof tests !== 'object' || Array.isArray(tests)) throw new Error(`Auto-review settings ${path} need "tests" as an object.`);
+  const unknownTests = Object.keys(tests).filter(key => !Object.hasOwn(TEST_DEFAULTS, key));
+  if (unknownTests.length) throw new Error(`Auto-review settings ${path} have unknown "tests" keys: ${unknownTests.join(', ')}.`);
+  const merged = { ...TEST_DEFAULTS, ...tests } as Record<string, unknown>;
+  for (const key of ['enabled', 'sandbox'] as const) {
+    if (typeof merged[key] !== 'boolean') throw new Error(`Auto-review settings ${path} need "tests.${key}" as true or false.`);
+  }
+  for (const [key, [min, max]] of Object.entries(TEST_LIMITS)) {
+    const value = merged[key];
+    if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
+      throw new Error(`Auto-review settings ${path} need "tests.${key}" as a whole number from ${min} to ${max}.`);
+    }
+  }
+  return { path, model: model as string | undefined, thinking: thinking as ReviewThinking | undefined, tests: merged as TestSettings };
+}
+
+/** Test-run limits for reviews; a missing settings file means the defaults. */
+export function readTestSettings(historyRoot: string): TestSettings {
+  return readSettings(historyRoot).tests;
+}
+
+function withSettings(historyRoot: string, selection?: ReviewSelection): { selection?: ReviewSelection; source?: string } {
+  const { path, model, thinking } = readSettings(historyRoot);
+  const merged = { model: selection?.model ?? model, thinking: selection?.thinking ?? thinking };
   const used = (selection?.model === undefined && model !== undefined) || (selection?.thinking === undefined && thinking !== undefined);
   return {
     selection: merged.model === undefined && merged.thinking === undefined ? undefined : merged,
