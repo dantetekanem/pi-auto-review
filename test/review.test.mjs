@@ -176,6 +176,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_next_action',
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
+    'agentic_code_review_run_tests',
     'agentic_code_review_save_learning',
     'agentic_code_review_subscribe',
   ]);
@@ -422,6 +423,12 @@ test('malformed or unsupported settings fail before artifacts or launch', async 
     [{ model: 'vendor-a/missing' }, /unavailable or unregistered\. The model or thinking level came from .*settings\.json\./],
     [{ model: 'vendor-a/configured', thinking: 'xhigh' }, /does not support xhigh\. The model or thinking level came from .*settings\.json\./],
     [{ thinkng: 'low' }, /unknown keys: thinkng\./],
+    [{ tests: [] }, /"tests" as an object/],
+    [{ tests: { budget: 3 } }, /unknown "tests" keys: budget\./],
+    [{ tests: { toString: 1 } }, /unknown "tests" keys: toString\./],
+    [{ tests: { sandbox: 'off' } }, /"tests\.sandbox" as true or false/],
+    [{ tests: { maxRuns: 0 } }, /"tests\.maxRuns" as a whole number from 1 to 40/],
+    [{ tests: { timeoutSeconds: 9.5 } }, /"tests\.timeoutSeconds" as a whole number from 10 to 1800/],
   ];
   for (const [index, [contents, pattern]] of cases.entries()) {
     const harness = createReviewFixture(t, `settings-${index}`);
@@ -431,6 +438,15 @@ test('malformed or unsupported settings fail before artifacts or launch', async 
     assert.equal(exists(join(harness.storage, `settings-${index}`)), false);
     assert.equal(harness.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
   }
+});
+
+test('test-run settings default when absent and take bounded overrides', async t => {
+  const { readTestSettings } = await jiti.import('../src/runtime.ts');
+  const root = mkdtempSync(join(tmpdir(), 'auto-review-test-settings-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.deepEqual(readTestSettings(root), { enabled: true, sandbox: true, maxRuns: 12, timeoutSeconds: 300 });
+  writeFileSync(join(root, 'settings.json'), JSON.stringify({ thinking: 'high', tests: { sandbox: false, maxRuns: 4 } }));
+  assert.deepEqual(readTestSettings(root), { enabled: true, sandbox: false, maxRuns: 4, timeoutSeconds: 300 });
 });
 
 test('a busy review pane is retried in the same pane without a second split', async t => {
@@ -820,6 +836,66 @@ test('completion validates optional evidence graphs against this run before publ
   assert.equal(assessment.basis, 'recorded-identities');
   assert.equal(assessment.nodes[0].status, 'unknown');
   assert.deepEqual(assessment.nodes[0].reasons, ['missing-identity']);
+});
+
+function writeTestRuns(directory, runId, runs) {
+  const sha = value => createHash('sha256').update(value).digest('hex');
+  const index = { schemaVersion: 1, runId, settings: { enabled: true, sandbox: true, maxRuns: 12, timeoutSeconds: 300 },
+    workspace: join(directory, `${runId}.tests`, 'workspace'), runs: [] };
+  runs.forEach(([kind, outcome, grade], position) => {
+    const relative = `${runId}.tests/${position + 1}-${kind}`;
+    mkdirSync(join(directory, relative), { recursive: true });
+    const files = { 'stdout.txt': `run ${position + 1}\n`, 'stderr.txt': '', 'change.diff': kind === 'baseline' ? '' : '--- a/src/limit.mjs\n+++ b/src/limit.mjs\n' };
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(directory, relative, name), text);
+    const receipt = JSON.stringify({ schemaVersion: 1, runId, index: position + 1, kind, outcome, grade,
+      stdoutSha256: sha(files['stdout.txt']), stderrSha256: sha(''), changeSha256: sha(files['change.diff']) });
+    writeFileSync(join(directory, relative, 'receipt.json'), receipt);
+    index.runs.push({ index: position + 1, kind, outcome, grade, receipt: { path: `${relative}/receipt.json`, sha256: sha(receipt) } });
+  });
+  writeFileSync(join(directory, `${runId}.tests.json`), JSON.stringify(index));
+}
+
+test('completion attaches verified test runs, refuses unsettled or changed ones and removes the workspace copy', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  const directory = dirname(paths.review);
+  writeTestRuns(directory, runId, [['baseline', 'passed', 'pass'], ['break', 'survived', 'fail']]);
+  mkdirSync(join(directory, `${runId}.tests`, 'workspace', 'src'), { recursive: true });
+  const cite = run => ({ id: 'finding-1', state: 'accepted', evidence: [{ source: join(directory, `${runId}.tests`, run, 'receipt.json'), detail: 'break survived' }] });
+  const draft = { findingId: 'finding-1', path: 'src/limit.mjs', line: 3, body: 'No test notices the dropped guard.' };
+  const write = finding => writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-11-06T00:00:00Z', findings: [finding], commentDrafts: [draft] }));
+  const rejects = pattern => assert.rejects(harness.complete({ sessionId, runId, summary: 'Tests ran.' }), pattern);
+
+  write(cite('3-edge'));
+  await rejects(/cite test runs that are not in .*\.tests\.json: .*3-edge\/receipt\.json/);
+  write({ ...cite('2-break'), evidence: [{ source: `${directory}/${runId}.tests/1-baseline/../9-edge/receipt.json`, detail: 'escapes its run' }] });
+  await rejects(/cite test runs that are not in .*\.tests\.json: .*1-baseline\/\.\.\/9-edge\/receipt\.json/);
+  write(cite('2-break'));
+  writeFileSync(join(directory, `${runId}.tests.active`), '{}');
+  await rejects(/still in flight/);
+  rmSync(join(directory, `${runId}.tests.active`));
+  const stdout = join(directory, `${runId}.tests`, '2-break', 'stdout.txt');
+  writeFileSync(stdout, 'edited\n');
+  await rejects(/Test run 2: stdout\.txt changed/);
+  writeFileSync(stdout, 'run 2\n');
+  assert.equal(exists(paths.complete), false);
+
+  await harness.complete({ sessionId, runId, summary: 'Tests ran.' });
+  const { testRuns } = readJson(paths.review);
+  assert.equal(testRuns.runs, 2);
+  assert.equal(testRuns.sandbox, true);
+  assert.deepEqual(testRuns.outcomes, { baseline: { passed: 1 }, break: { survived: 1 } });
+  assert.deepEqual(testRuns.receipts, ['1-baseline', '2-break'].map(run => join(directory, `${runId}.tests`, run, 'receipt.json')));
+  assert.equal(exists(join(directory, `${runId}.tests`, 'workspace')), false);
+  assert.equal(exists(join(directory, `${runId}.tests`, '2-break', 'receipt.json')), true);
+});
+
+test('completion refuses a testRuns field that no test-run index backs', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-11-06T00:00:00Z', testRuns: { runs: 3 } }));
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Claimed runs.' }), /completion writes it from the test-run index/);
+  assert.equal(exists(paths.complete), false);
 });
 
 test('completion reports every review JSON problem in one rejection and writes nothing', async t => {

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Reviews run the repository's own tests against the change through `agentic_code_review_run_tests`. Runs use a copy-on-write copy of the affected components, never the checkout, and never run setup commands, installs or services. A macOS sandbox denies the test's network access, its writes outside the copy, LaunchServices, Apple events and signals to other processes. A `baseline` must pass, a `revert` of the source change must fail, a `break` of a changed line should fail, and an `edge` test the reviewer writes holds or reproduces a bug. Reviewers propose breaks and edge tests, the visible top-level session runs them within a 12-run budget, and completion verifies every receipt and adds `testRuns` to the review. `settings.json` takes `tests` limits: `enabled`, `sandbox`, `maxRuns` and `timeoutSeconds`.
 - An optional `settings.json` in the auto-review directory sets the default review `model` and `thinking` for the tool and `/code-review`. Explicit tool arguments still win. A malformed file, an unknown key or an unsupported value stops the review before any artifact is written, and the error names the file. `agentic_code_review_list` skips the file.
 
 ### Changed

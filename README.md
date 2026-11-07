@@ -77,10 +77,10 @@ agentic_code_review({
 To set a default for every review, write `~/.pi/agent/auto-review/settings.json`:
 
 ```json
-{ "model": "provider/model", "thinking": "high" }
+{ "model": "provider/model", "thinking": "high", "tests": { "sandbox": true, "maxRuns": 12 } }
 ```
 
-Both fields are optional. An explicit tool argument wins, then this file, then the invoking session's selection. `/code-review` reads the same file. A settings model goes through the same registration and thinking-level checks as an explicit one. A malformed file, an unknown key or an unsupported value stops the review before any artifact is written, and the error names the file. Most review time is the top-level session's own generation, so its thinking level sets most of the wall time.
+Every field is optional; `tests` sets the limits for [test runs during a review](docs/tests.md). An explicit tool argument wins, then this file, then the invoking session's selection. `/code-review` reads the same file. A settings model goes through the same registration and thinking-level checks as an explicit one. A malformed file, an unknown key or an unsupported value stops the review before any artifact is written, and the error names the file. Most review time is the top-level session's own generation, so its thinking level sets most of the wall time.
 
 To find a review from an earlier session, call `agentic_code_review_list({ target: "https://github.com/owner/repo/pull/7", limit: 20 })`, or omit `target` to list across retained sessions. The target filter is exact. Each result includes validated `reviewSessionId`, `runId`, `expectedTarget`, `expectedHead`, `recordedStatus`, timestamps (null when absent), and derived artifact paths. Read `paths.review` for the saved report; companion paths may be absent or invalid. Discovery does not require telemetry and returns no prompts, source, or findings.
 
@@ -99,6 +99,19 @@ For a pull request URL the review session first pulls the PR itself through the 
 3. **Trace future impact.** Follow changed assumptions inside out through callees, callers and consumers. Judge ownership, coupling, compatibility, recovery and test durability against concrete maintenance risks. Start at three call hops and deepen a specific connection when its frontier leaves an important question unanswered.
 
 The report links evidence and gaps for all three passes. Each run saves verified accomplishments, useful test commands and runtime limits, settled questions and review methods so the next review can revalidate and build on them. Focused tests run only after their side effects are checked; broader execution needs authorization. Disposable reproductions stay with the run artifacts, separate from the reviewed tree.
+
+## Test runs during a review
+
+The review runs the repository's own tests against the change, because tests already control their environment. `agentic_code_review_run_tests` copies the affected components copy-on-write, links the rest of the checkout, and runs a focused test command there. By default it runs under a macOS sandbox that denies the test's own network access and its writes outside the copy; reads stay open. It never writes to the checkout and never runs setup commands, installs or services: when the tests cannot run as the checkout is, the review stays source-only and says so. Each review gets 12 runs by default:
+
+| Kind | Runs | Passes when |
+| --- | --- | --- |
+| `baseline` | the selected tests at the reviewed head | they pass |
+| `revert` | the change's source files at base, its tests at head | the tests fail, so they depend on the change |
+| `break` | one changed line edited to turn off a safeguard | a test fails, so the tests can see that safeguard |
+| `edge` | a new edge-case test the reviewer writes | it passes; a failure is a bug candidate with its reproducer |
+
+Reviewers propose breaks and edge tests; the visible top-level session runs them, files surviving breaks and failing edge tests as findings, and cites their receipts. Completion verifies every receipt and adds `testRuns` to the review. Details, limits and settings are in [docs/tests.md](docs/tests.md).
 
 ## Opt-in execution
 
