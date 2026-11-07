@@ -1,4 +1,4 @@
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { getAgentDir, withFileMutationQueue, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { randomUUID } from 'node:crypto';
 import {
@@ -16,10 +16,10 @@ import {
   writeFileSync,
   type FSWatcher,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import timers from 'node:timers/promises';
-import { registerFindings } from './findings.ts';
+import { OPEN_BUG_STATUSES, registerFindings } from './findings.ts';
 import { registerAdaptive } from './adaptive-tool.ts';
 import { readExecutionReceipts, registerExperiments } from './experiments-tool.ts';
 import { registerCodebaseLearning } from './codebase.ts';
@@ -34,6 +34,9 @@ import {
   missionPrompt,
   preflightReview,
   runHeadlessReview,
+  systemClock,
+  THINKING_LEVELS,
+  type ReviewClock,
   type ReviewPreflight,
   type ReviewSelection,
 } from './runtime.ts';
@@ -273,7 +276,7 @@ function watchCompletion(pi: ExtensionAPI, run: ReturnType<typeof prepareReview>
     processMonitors.delete(runId);
     pi.sendMessage({
       customType: 'agentic-code-review-complete',
-      content: `Review session ${reviewSession.name} finished (${String(marker.status ?? 'unknown')}). Read ${paths.review}, ${paths.bugs} and the relevant records in ${paths.map}, then present the review under the saved presentation and voice prompts. The review's draft summary was: ${String(marker.summary ?? '').slice(0, 5000)}`,
+      content: `Review session ${reviewSession.name} finished (${String(marker.status ?? 'unknown')}). Read ${paths.review} and ${paths.bugs}; open a record in ${paths.map} only for a claim your report cites. Then present the review under the saved presentation and voice prompts. The review's draft summary was: ${String(marker.summary ?? '').slice(0, 5000)}`,
       details: { runId, paths, reviewSession, marker, telemetry: JSON.parse(readFileSync(paths.review, 'utf8')).telemetry ?? null },
       display: true,
     }, { triggerTurn: true, deliverAs: 'followUp' });
@@ -365,13 +368,51 @@ async function adoptReviewModel(pi: ExtensionAPI, ctx: ExtensionContext, preflig
   return changes;
 }
 
+function malformedMapLines(mapPath: string): number[] {
+  let bytes: Buffer;
+  try { bytes = readFileSync(mapPath); } catch { return []; }
+  if (bytes.length > 2_097_152) return [];
+  const text = bytes.toString('utf8');
+  const lines: number[] = [];
+  text.split('\n').forEach((line, index) => {
+    if (!line.trim()) return;
+    let record: unknown;
+    try { record = JSON.parse(line); } catch { record = undefined; }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) lines.push(index + 1);
+  });
+  return lines;
+}
+
+function readBugEnvelope(bugsPath: string): Record<string, unknown> | undefined | null {
+  let contents: string;
+  try { contents = readFileSync(bugsPath, 'utf8'); } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null;
+  }
+  try {
+    const envelope: unknown = JSON.parse(contents);
+    return envelope && typeof envelope === 'object' && !Array.isArray(envelope) ? envelope as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+async function sealBugEnvelope(bugsPath: string): Promise<void> {
+  await withFileMutationQueue(bugsPath, async () => {
+    const envelope = readBugEnvelope(bugsPath);
+    if (!envelope) throw new Error(`${basename(bugsPath)} is no longer a JSON object; no completion was published.`);
+    if (!OPEN_BUG_STATUSES.includes(String(envelope.status))) return;
+    const temp = `${bugsPath}.${randomUUID()}.tmp`;
+    const fd = openSync(temp, 'wx', 0o600);
+    try { writeFileSync(fd, `${JSON.stringify({ ...envelope, status: 'complete' })}\n`); } finally { closeSync(fd); }
+    renameSync(temp, bugsPath);
+  });
+}
+
 function completionDelivered(ctx: ExtensionContext, runId: string): boolean {
   return ctx.sessionManager.getEntries().some(entry => entry.type === 'custom_message'
     && entry.customType === 'agentic-code-review-complete'
     && (entry.details as { runId?: unknown } | undefined)?.runId === runId);
 }
 
-export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review')): void {
+export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'auto-review'), clock: ReviewClock = systemClock): void {
   registerFindings(pi, root);
   const availableFamilies = registerExperiments(pi, root);
   registerAdaptive(pi, root, availableFamilies);
@@ -397,7 +438,7 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
   pi.registerTool({
     name: 'agentic_code_review_complete',
     label: 'Complete review session',
-    description: 'Finish one prepared auto-review after its final review JSON, bug handoff and learning have been saved. Called only by the dedicated top-level review session. Writes the completion marker that wakes the invoking Pi session, returns the human report and terminates the review turn.',
+    description: 'Finish one prepared auto-review after its final review JSON, bug handoff and learning have been saved. Called only by the dedicated top-level review session. Checks the review JSON and map, reporting every problem at once, then seals the bug file. Writes the completion marker that wakes the invoking Pi session, returns the short summary and terminates the review turn.',
     parameters: Type.Object({
       sessionId: Type.String({ maxLength: 128 }),
       runId: Type.String(),
@@ -410,9 +451,10 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       const completePath = join(root, sessionId, completionFileName(runId));
       const reviewContents = readFileSync(reviewPath, 'utf8');
       const review: unknown = JSON.parse(reviewContents);
-      if (!review || typeof review !== 'object' || (review as { status?: unknown }).status !== 'complete' || typeof (review as { completedAt?: unknown }).completedAt !== 'string') {
-        throw new Error('Complete the review JSON and its completedAt timestamp before the handoff.');
-      }
+      if (!review || typeof review !== 'object' || Array.isArray(review)) throw new Error('Complete the review JSON: it must be an object.');
+      const problems: string[] = [];
+      if ((review as { status?: unknown }).status !== 'complete') problems.push('Complete the review JSON: status must be "complete".');
+      if (typeof (review as { completedAt?: unknown }).completedAt !== 'string') problems.push('Complete the review JSON: completedAt must be a timestamp string.');
       const finalReview = review as { findings?: unknown; commentDrafts?: unknown; executionReceipts?: unknown;
         evidenceGraph?: unknown; evidenceContext?: unknown; evidenceAssessment?: unknown;
         machineClaims?: unknown; machineAssessment?: unknown; telemetry?: unknown };
@@ -420,10 +462,16 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
       const drafts = Array.isArray(finalReview.commentDrafts) ? finalReview.commentDrafts : [];
       const acceptedIds = findings.filter(item => item && typeof item === 'object' && (item as { state?: unknown }).state === 'accepted').map(item => (item as { id?: unknown }).id).filter((id): id is string => typeof id === 'string');
       const validDrafts = drafts.filter(item => item && typeof item === 'object' && typeof (item as { findingId?: unknown }).findingId === 'string' && typeof (item as { path?: unknown }).path === 'string' && Number.isInteger((item as { line?: unknown }).line) && typeof (item as { body?: unknown }).body === 'string' && Boolean((item as { body: string }).body.trim()));
-      if (validDrafts.length !== drafts.length || acceptedIds.some(id => !validDrafts.some(item => (item as { findingId: string }).findingId === id))) {
-        throw new Error('Every accepted finding needs one valid commentDraft before completion.');
-      }
+      if (validDrafts.length !== drafts.length) problems.push(`Every commentDraft needs findingId, path, an integer line and a body: ${drafts.length - validDrafts.length} invalid.`);
+      const undrafted = acceptedIds.filter(id => !validDrafts.some(item => (item as { findingId: string }).findingId === id));
+      if (undrafted.length) problems.push(`Every accepted finding needs one valid commentDraft before completion: ${undrafted.join(', ')}.`);
       const mapPath = join(root, sessionId, `${runId}.map.jsonl`);
+      const malformedLines = malformedMapLines(mapPath);
+      if (malformedLines.length) problems.push(`${runId}.map.jsonl lines that are not JSON objects: ${malformedLines.slice(0, 20).join(', ')}${malformedLines.length > 20 ? `, and ${malformedLines.length - 20} more` : ''}.`);
+      const bugsPath = join(root, sessionId, `${runId}.bugs.json`);
+      const bugEnvelope = readBugEnvelope(bugsPath);
+      if (bugEnvelope === null) problems.push(`${runId}.bugs.json must be a JSON object.`);
+      if (problems.length) throw new Error(`Review not completed; fix all of these and call completion again:\n- ${problems.join('\n- ')}`);
       const evidence = readCompletionEvidence(finalReview.evidenceGraph, mapPath, runId, finalReview.evidenceContext);
       const receipts = readExecutionReceipts(root, sessionId, runId);
       const machine = finalReview.machineClaims === undefined ? undefined
@@ -457,9 +505,10 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         ...(reviewPane ? { reviewPane } : {}),
       };
       const encoded = `${JSON.stringify(marker)}\n`;
-      if (existsSync(completePath)) {
-        if (readFileSync(completePath, 'utf8') !== encoded) throw new Error('A different completion was already saved for this run.');
-      } else {
+      const delivered = existsSync(completePath);
+      if (delivered && readFileSync(completePath, 'utf8') !== encoded) throw new Error('A different completion was already saved for this run.');
+      if (bugEnvelope && OPEN_BUG_STATUSES.includes(String(bugEnvelope.status))) await sealBugEnvelope(bugsPath);
+      if (!delivered) {
         const temp = `${completePath}.${randomUUID()}.tmp`;
         const fd = openSync(temp, 'wx', 0o600);
         try { writeFileSync(fd, encoded); } finally { closeSync(fd); }
@@ -484,17 +533,19 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
     const closeWatcher = watchCompletion(pi, run);
     try {
       let reviewSession;
+      let paneFailure = '';
       try {
-        reviewSession = await launchReviewPane(pi, ctx, { name: run.details.reviewSession.name, missionPath: run.details.paths.mission, preflight });
-      } catch {
-        reviewSession = await runHeadlessReview(pi, { name: `${run.details.reviewSession.name}-headless`, missionPath: run.details.paths.mission, preflight });
+        reviewSession = await launchReviewPane(pi, ctx, { name: run.details.reviewSession.name, missionPath: run.details.paths.mission, preflight }, signal, clock);
+      } catch (error) {
+        paneFailure = (error instanceof Error ? error.message : String(error)).split('\n', 1)[0]!.slice(0, 200);
+        reviewSession = await runHeadlessReview(pi, { name: `${run.details.reviewSession.name}-headless`, missionPath: run.details.paths.mission, preflight }, signal, clock);
       }
       if (reviewSession.paneId !== 'headless' && watchdogEnabled(pi)) monitorReviewProcess(pi, run, reviewSession);
       const { runId, sessionId, paths } = run.details;
       return {
         content: [{
           type: 'text' as const,
-          text: `${formatPreflight(preflight, paths.review)}\nSession: ${reviewSession.name}${reviewSession.paneId === 'headless' ? ' (headless recovery)' : ` in Herdr pane ${reviewSession.paneId}`}\n\nThis Pi session will receive one completion handoff from ${paths.complete}.`,
+          text: `${formatPreflight(preflight, paths.review)}\nSession: ${reviewSession.name}${reviewSession.paneId === 'headless' ? ` (headless recovery; visible pane failed: ${paneFailure})` : ` in Herdr pane ${reviewSession.paneId}`}\n\nThis Pi session will receive one completion handoff from ${paths.complete}.`,
         }],
         details: { runId, sessionId, paths, preflight: run.details.preflight, reviewSession },
       };
@@ -590,13 +641,13 @@ export function registerReview(pi: ExtensionAPI, root = join(getAgentDir(), 'aut
         maxLength: 4000,
       })),
       model: Type.Optional(Type.String({
-        description: 'Registered provider/model ID for this review run, such as provider/model. Omit to inherit the invoking model selection.',
+        description: 'Registered provider/model ID for this review run, such as provider/model. Omit to use the `model` in the auto-review settings.json, then the invoking model selection.',
         pattern: '^[^/\\s]+/[^\\s]+$',
         maxLength: 500,
       })),
-      thinking: Type.Optional(Type.Union([
-        'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
-      ].map(level => Type.Literal(level)), { description: 'Thinking level for this review run. Omit to inherit the invoking level.' })),
+      thinking: Type.Optional(Type.Union(THINKING_LEVELS.map(level => Type.Literal(level)), {
+        description: 'Thinking level for this review run. Omit to use the `thinking` in the auto-review settings.json, then the invoking level.',
+      })),
     }),
     async execute(_id, { context = '', checkout, model, thinking }, signal, _onUpdate, ctx) {
       const selection = model === undefined && thinking === undefined ? undefined : { model, thinking };
