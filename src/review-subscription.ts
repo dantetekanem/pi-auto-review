@@ -178,7 +178,7 @@ function retainedReviews(root: string, limit: number, target?: string) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { reviews, gaps, scannedEntries, truncated };
   }
   scan(root, (sessionId) => {
-    if (sessionId === 'codebases') return;
+    if (sessionId === 'codebases' || sessionId === 'settings.json') return;
     const directory = join(root, sessionId);
     if (!SESSION_ID.test(sessionId)) {
       gaps.push({ path: directory, reason: 'Invalid review session directory name.' });

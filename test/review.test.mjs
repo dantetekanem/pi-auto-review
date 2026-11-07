@@ -30,7 +30,21 @@ const { registerReview } = await jiti.import('../src/index.ts');
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const sha = char => char.repeat(40);
 
-function createReviewFixture(t, sessionId = 'session-1') {
+function stepClock() {
+  return {
+    time: 0,
+    sleeps: [],
+    sleep(ms) {
+      this.sleeps.push(ms);
+      return Promise.resolve();
+    },
+    now() {
+      return this.time;
+    },
+  };
+}
+
+function createReviewFixture(t, sessionId = 'session-1', clock) {
   const dir = mkdtempSync(join(tmpdir(), 'agentic-review-test-'));
   const storage = join(dir, 'agent', 'auto-review');
   const cwd = join(dir, 'project');
@@ -118,7 +132,7 @@ function createReviewFixture(t, sessionId = 'session-1') {
       input: async () => behavior.input,
     },
   };
-  registerReview(pi, storage);
+  registerReview(pi, storage, clock);
 
   t.after(() => {
     eventHandlers.get('session_shutdown')?.();
@@ -162,6 +176,7 @@ test('installed Pi loader registers the dedicated-session review tools from a di
     'agentic_code_review_next_action',
     'agentic_code_review_read_learning',
     'agentic_code_review_read_prompt',
+    'agentic_code_review_run_tests',
     'agentic_code_review_save_learning',
     'agentic_code_review_subscribe',
   ]);
@@ -325,6 +340,245 @@ test('explicit unavailable or unsupported per-run options fail before artifacts 
   await assert.rejects(unsupported.tool('', undefined, { model: 'openai/medium-only', thinking: 'xhigh' }), /does not support xhigh/i);
   assert.equal(exists(join(unsupported.storage, 'unsupported-options')), false);
   assert.equal(unsupported.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
+});
+
+function writeSettings(harness, contents) {
+  mkdirSync(harness.storage, { recursive: true });
+  writeFileSync(join(harness.storage, 'settings.json'), typeof contents === 'string' ? contents : JSON.stringify(contents));
+}
+
+function registerModels(harness, ...models) {
+  harness.ctx.modelRegistry.find = (provider, id) => models.find(model => model.provider === provider && model.id === id);
+}
+
+const settingsModel = { provider: 'vendor-a', id: 'configured', reasoning: true };
+const explicitModel = { provider: 'vendor-b', id: 'requested', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' } };
+
+test('settings file supplies the default review model and thinking level', async t => {
+  const harness = createReviewFixture(t);
+  writeSettings(harness, { model: 'vendor-a/configured', thinking: 'high' });
+  registerModels(harness, settingsModel);
+
+  const result = await harness.tool();
+  const start = call(harness, 'herdr', ['agent', 'start']);
+  assert.equal(result.details.preflight.model, 'vendor-a/configured');
+  assert.equal(result.details.preflight.thinking, 'high');
+  assert.deepEqual(start.args.slice(start.args.indexOf('--') + 1, -2), ['--model', 'vendor-a/configured', '--thinking', 'high']);
+  assert.deepEqual(harness.modelChanges, []);
+
+  const thinkingOnly = createReviewFixture(t, 'thinking-only');
+  writeSettings(thinkingOnly, { thinking: 'low' });
+  const kept = await thinkingOnly.tool();
+  assert.equal(kept.details.preflight.model, 'openai/gpt-test');
+  assert.equal(kept.details.preflight.thinking, 'low');
+});
+
+test('explicit model and thinking arguments beat the settings file field by field', async t => {
+  const both = createReviewFixture(t);
+  writeSettings(both, { model: 'vendor-a/configured', thinking: 'low' });
+  registerModels(both, settingsModel, explicitModel);
+  const overridden = await both.tool('', undefined, { model: 'vendor-b/requested', thinking: 'xhigh' });
+  assert.equal(overridden.details.preflight.model, 'vendor-b/requested');
+  assert.equal(overridden.details.preflight.thinking, 'xhigh');
+
+  const thinkingOnly = createReviewFixture(t, 'explicit-thinking');
+  writeSettings(thinkingOnly, { model: 'vendor-a/configured', thinking: 'low' });
+  registerModels(thinkingOnly, settingsModel);
+  const mixed = await thinkingOnly.tool('', undefined, { thinking: 'medium' });
+  assert.equal(mixed.details.preflight.model, 'vendor-a/configured');
+  assert.equal(mixed.details.preflight.thinking, 'medium');
+
+  const unused = createReviewFixture(t, 'explicit-failure');
+  writeSettings(unused, { thinking: 'low' });
+  const failure = await unused.tool('', undefined, { model: 'missing/model', thinking: 'medium' }).then(() => undefined, caught => caught);
+  assert.match(failure.message, /unavailable or unregistered\.$/);
+});
+
+test('a clean /code-review adopts the settings level, and a dirty caller keeps its own', async t => {
+  const clean = createReviewFixture(t, 'settings-clean');
+  writeSettings(clean, { thinking: 'low' });
+  await clean.command('');
+  assert.deepEqual(clean.modelChanges, []);
+  assert.deepEqual(clean.thinkingChanges, ['low']);
+  assert.match(clean.messages[0].message.content, /\(set thinking low\)/);
+  assert.equal(clean.userMessages.length, 1);
+
+  const dirty = createReviewFixture(t, 'settings-dirty');
+  writeSettings(dirty, { thinking: 'low' });
+  dirty.ctx.sessionManager.getBranch = () => [{ type: 'message', message: { role: 'user', content: 'Earlier work.' } }];
+  await dirty.command('');
+  const start = call(dirty, 'herdr', ['agent', 'start']);
+  const level = start.args.indexOf('--thinking');
+  assert.deepEqual(start.args.slice(level, level + 2), ['--thinking', 'low']);
+  assert.deepEqual(dirty.modelChanges, []);
+  assert.deepEqual(dirty.thinkingChanges, []);
+});
+
+test('malformed or unsupported settings fail before artifacts or launch', async t => {
+  const cases = [
+    ['not json', /unreadable/],
+    ['[]', /must be a JSON object/],
+    [{ model: 'no-slash' }, /provider\/id/],
+    [{ thinking: 'extreme' }, /one of off, minimal/],
+    [{ model: 'vendor-a/missing' }, /unavailable or unregistered\. The model or thinking level came from .*settings\.json\./],
+    [{ model: 'vendor-a/configured', thinking: 'xhigh' }, /does not support xhigh\. The model or thinking level came from .*settings\.json\./],
+    [{ thinkng: 'low' }, /unknown keys: thinkng\./],
+    [{ tests: [] }, /"tests" as an object/],
+    [{ tests: { budget: 3 } }, /unknown "tests" keys: budget\./],
+    [{ tests: { toString: 1 } }, /unknown "tests" keys: toString\./],
+    [{ tests: { sandbox: 'off' } }, /"tests\.sandbox" as true or false/],
+    [{ tests: { maxRuns: 0 } }, /"tests\.maxRuns" as a whole number from 1 to 40/],
+    [{ tests: { timeoutSeconds: 9.5 } }, /"tests\.timeoutSeconds" as a whole number from 10 to 1800/],
+  ];
+  for (const [index, [contents, pattern]] of cases.entries()) {
+    const harness = createReviewFixture(t, `settings-${index}`);
+    writeSettings(harness, contents);
+    registerModels(harness, settingsModel);
+    await assert.rejects(harness.tool(), pattern);
+    assert.equal(exists(join(harness.storage, `settings-${index}`)), false);
+    assert.equal(harness.execCalls.some(item => item.command === 'herdr' || item.command === 'pi'), false);
+  }
+});
+
+test('test-run settings default when absent and take bounded overrides', async t => {
+  const { readTestSettings } = await jiti.import('../src/runtime.ts');
+  const root = mkdtempSync(join(tmpdir(), 'auto-review-test-settings-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.deepEqual(readTestSettings(root), { enabled: true, sandbox: true, maxRuns: 12, timeoutSeconds: 300 });
+  writeFileSync(join(root, 'settings.json'), JSON.stringify({ thinking: 'high', tests: { sandbox: false, maxRuns: 4 } }));
+  assert.deepEqual(readTestSettings(root), { enabled: true, sandbox: false, maxRuns: 4, timeoutSeconds: 300 });
+});
+
+test('a busy review pane is retried in the same pane without a second split', async t => {
+  const clock = stepClock();
+  const harness = createReviewFixture(t, 'busy-pane', clock);
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  let starts = 0;
+  harness.behavior.execute = (command, args, options) => {
+    if (command === 'herdr' && args[0] === 'agent' && args[1] === 'start' && (starts += 1) <= 3) {
+      return { code: 1, stdout: '', stderr: '{"error":{"code":"agent_pane_busy"}}' };
+    }
+    return fallback(command, args, options);
+  };
+
+  const result = await harness.tool();
+  const herdr = (...prefix) => harness.execCalls.filter(item => item.command === 'herdr' && prefix.every((value, index) => item.args[index] === value));
+  assert.equal(result.details.reviewSession.paneId, 'w1:p2');
+  assert.equal(herdr('pane', 'split').length, 1);
+  assert.equal(herdr('agent', 'start').length, 4);
+  assert.deepEqual(new Set(herdr('agent', 'start').map(item => item.args[item.args.indexOf('--pane') + 1])), new Set(['w1:p2']));
+  assert.equal(herdr('pane', 'close').length, 0);
+  assert.deepEqual(clock.sleeps, [2000, 2000, 2000]);
+
+  const stuck = createReviewFixture(t, 'stuck-pane', stepClock());
+  const stuckFallback = stuck.behavior.execute.bind(stuck.behavior);
+  stuck.behavior.execute = (command, args, options) => command === 'herdr' && args[0] === 'agent' && args[1] === 'start'
+    ? { code: 1, stdout: '', stderr: 'agent_pane_busy' }
+    : stuckFallback(command, args, options);
+  const recovered = await stuck.tool();
+  assert.equal(recovered.details.reviewSession.paneId, 'headless');
+  assert.equal(stuck.execCalls.filter(item => item.command === 'herdr' && item.args[1] === 'split').length, 2);
+  assert.equal(stuck.execCalls.filter(item => item.command === 'herdr' && item.args[1] === 'start').length, 20);
+});
+
+test('headless review is rerun only after an early failure and receives the abort signal', async t => {
+  const clock = stepClock();
+  const early = createReviewFixture(t, 'early-failure', clock);
+  let runs = 0;
+  const fallback = early.behavior.execute.bind(early.behavior);
+  early.behavior.execute = (command, args, options) => {
+    if (command === 'herdr') return { code: 1, stdout: '', stderr: 'pane unavailable' };
+    if (command === 'pi') return ++runs === 1 ? { code: 1, stdout: '', stderr: 'startup failed' } : { code: 0, stdout: '', stderr: '' };
+    return fallback(command, args, options);
+  };
+  const controller = new AbortController();
+  const recovered = await early.tool('', controller.signal);
+  const runsOfPi = early.execCalls.filter(item => item.command === 'pi');
+  assert.equal(recovered.details.reviewSession.paneId, 'headless');
+  assert.equal(runsOfPi.length, 2);
+  assert.equal(runsOfPi[0].options.signal, controller.signal);
+
+  const lateClock = stepClock();
+  const late = createReviewFixture(t, 'late-failure', lateClock);
+  const lateFallback = late.behavior.execute.bind(late.behavior);
+  late.behavior.execute = (command, args, options) => {
+    if (command === 'herdr') return { code: 1, stdout: '', stderr: 'pane unavailable' };
+    if (command === 'pi') {
+      lateClock.time += 61_000;
+      return { code: 1, stdout: '', stderr: 'crashed mid-review' };
+    }
+    return lateFallback(command, args, options);
+  };
+  await assert.rejects(late.tool(), /failed after 61 s: crashed mid-review/);
+  assert.equal(late.execCalls.filter(item => item.command === 'pi').length, 1);
+});
+
+test('an abort during the first headless run rejects whatever exit code comes back', async t => {
+  const exits = [{ code: 1, stdout: '', stderr: 'startup failed' }, { code: 0, stdout: '', stderr: '', killed: true }];
+  for (const [index, exit] of exits.entries()) {
+    const harness = createReviewFixture(t, `abort-headless-${index}`, stepClock());
+    const fallback = harness.behavior.execute.bind(harness.behavior);
+    const controller = new AbortController();
+    harness.behavior.execute = (command, args, options) => {
+      if (command === 'herdr') return { code: 1, stdout: '', stderr: 'pane unavailable' };
+      if (command === 'pi') {
+        controller.abort();
+        return exit;
+      }
+      return fallback(command, args, options);
+    };
+    await assert.rejects(harness.tool('', controller.signal), /abort/i);
+    assert.equal(harness.execCalls.filter(item => item.command === 'pi').length, 1);
+  }
+});
+
+test('an abort during a busy-pane wait stops before another start or a recovery pane', async t => {
+  const controller = new AbortController();
+  const clock = { ...stepClock(), sleep(ms) {
+    this.sleeps.push(ms);
+    controller.abort();
+    return Promise.resolve();
+  } };
+  const harness = createReviewFixture(t, 'abort-busy', clock);
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  harness.behavior.execute = (command, args, options) => command === 'herdr' && args[0] === 'agent' && args[1] === 'start'
+    ? { code: 1, stdout: '', stderr: 'agent_pane_busy' }
+    : fallback(command, args, options);
+  await assert.rejects(harness.tool('', controller.signal), /abort/i);
+  const herdr = (...prefix) => harness.execCalls.filter(item => item.command === 'herdr' && prefix.every((value, index) => item.args[index] === value));
+  assert.equal(herdr('pane', 'split').length, 1);
+  assert.equal(herdr('agent', 'start').length, 1);
+  assert.deepEqual(herdr('pane', 'close').map(item => item.args[2]), ['w1:p2']);
+  assert.equal(harness.execCalls.some(item => item.command === 'pi'), false);
+});
+
+test('every busy start attempt closes the pane it split', async t => {
+  const harness = createReviewFixture(t, 'busy-close', stepClock());
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  let splits = 0;
+  harness.behavior.execute = (command, args, options) => {
+    if (command === 'herdr' && args[1] === 'split') return { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: `w1:p${2 + splits++}` } } }), stderr: '' };
+    if (command === 'herdr' && args[1] === 'start') return { code: 1, stdout: '', stderr: 'agent_pane_busy' };
+    return fallback(command, args, options);
+  };
+  const result = await harness.tool();
+  assert.equal(result.details.reviewSession.paneId, 'headless');
+  const closes = harness.execCalls.filter(item => item.command === 'herdr' && item.args[0] === 'pane' && item.args[1] === 'close');
+  assert.deepEqual(closes.map(item => item.args[2]), ['w1:p2', 'w1:p3']);
+});
+
+test('headless recovery receipt states why the visible pane failed', async t => {
+  const harness = createReviewFixture(t, 'fallback-reason');
+  const fallback = harness.behavior.execute.bind(harness.behavior);
+  harness.behavior.execute = (command, args, options) => command === 'herdr' && args[1] === 'layout'
+    ? { code: 1, stdout: '', stderr: `layout refused${'!'.repeat(400)}\nsecond line` }
+    : fallback(command, args, options);
+
+  const result = await harness.tool();
+  const line = result.content[0].text.split('\n').find(item => item.startsWith('Session:'));
+  assert.match(line, /headless recovery; visible pane failed: herdr pane layout --pane failed: layout refused!+\)$/);
+  assert.doesNotMatch(result.content[0].text, /second line/);
+  assert.ok(line.length < 300);
 });
 
 test('preflight reuses the newest matching reviewed checkout before falling back to the invoking cwd', async t => {
@@ -582,6 +836,143 @@ test('completion validates optional evidence graphs against this run before publ
   assert.equal(assessment.basis, 'recorded-identities');
   assert.equal(assessment.nodes[0].status, 'unknown');
   assert.deepEqual(assessment.nodes[0].reasons, ['missing-identity']);
+});
+
+function writeTestRuns(directory, runId, runs) {
+  const sha = value => createHash('sha256').update(value).digest('hex');
+  const index = { schemaVersion: 1, runId, settings: { enabled: true, sandbox: true, maxRuns: 12, timeoutSeconds: 300 },
+    workspace: join(directory, `${runId}.tests`, 'workspace'), runs: [] };
+  runs.forEach(([kind, outcome, grade], position) => {
+    const relative = `${runId}.tests/${position + 1}-${kind}`;
+    mkdirSync(join(directory, relative), { recursive: true });
+    const files = { 'stdout.txt': `run ${position + 1}\n`, 'stderr.txt': '', 'change.diff': kind === 'baseline' ? '' : '--- a/src/limit.mjs\n+++ b/src/limit.mjs\n' };
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(directory, relative, name), text);
+    const receipt = JSON.stringify({ schemaVersion: 1, runId, index: position + 1, kind, outcome, grade,
+      stdoutSha256: sha(files['stdout.txt']), stderrSha256: sha(''), changeSha256: sha(files['change.diff']) });
+    writeFileSync(join(directory, relative, 'receipt.json'), receipt);
+    index.runs.push({ index: position + 1, kind, outcome, grade, receipt: { path: `${relative}/receipt.json`, sha256: sha(receipt) } });
+  });
+  writeFileSync(join(directory, `${runId}.tests.json`), JSON.stringify(index));
+}
+
+test('completion attaches verified test runs, refuses unsettled or changed ones and removes the workspace copy', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  const directory = dirname(paths.review);
+  writeTestRuns(directory, runId, [['baseline', 'passed', 'pass'], ['break', 'survived', 'fail']]);
+  mkdirSync(join(directory, `${runId}.tests`, 'workspace', 'src'), { recursive: true });
+  const cite = run => ({ id: 'finding-1', state: 'accepted', evidence: [{ source: join(directory, `${runId}.tests`, run, 'receipt.json'), detail: 'break survived' }] });
+  const draft = { findingId: 'finding-1', path: 'src/limit.mjs', line: 3, body: 'No test notices the dropped guard.' };
+  const write = finding => writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-11-06T00:00:00Z', findings: [finding], commentDrafts: [draft] }));
+  const rejects = pattern => assert.rejects(harness.complete({ sessionId, runId, summary: 'Tests ran.' }), pattern);
+
+  write(cite('3-edge'));
+  await rejects(/cite test runs that are not in .*\.tests\.json: .*3-edge\/receipt\.json/);
+  write({ ...cite('2-break'), evidence: [{ source: `${directory}/${runId}.tests/1-baseline/../9-edge/receipt.json`, detail: 'escapes its run' }] });
+  await rejects(/cite test runs that are not in .*\.tests\.json: .*1-baseline\/\.\.\/9-edge\/receipt\.json/);
+  write(cite('2-break'));
+  writeFileSync(join(directory, `${runId}.tests.active`), '{}');
+  await rejects(/still in flight/);
+  rmSync(join(directory, `${runId}.tests.active`));
+  const stdout = join(directory, `${runId}.tests`, '2-break', 'stdout.txt');
+  writeFileSync(stdout, 'edited\n');
+  await rejects(/Test run 2: stdout\.txt changed/);
+  writeFileSync(stdout, 'run 2\n');
+  assert.equal(exists(paths.complete), false);
+
+  await harness.complete({ sessionId, runId, summary: 'Tests ran.' });
+  const { testRuns } = readJson(paths.review);
+  assert.equal(testRuns.runs, 2);
+  assert.equal(testRuns.sandbox, true);
+  assert.deepEqual(testRuns.outcomes, { baseline: { passed: 1 }, break: { survived: 1 } });
+  assert.deepEqual(testRuns.receipts, ['1-baseline', '2-break'].map(run => join(directory, `${runId}.tests`, run, 'receipt.json')));
+  assert.equal(exists(join(directory, `${runId}.tests`, 'workspace')), false);
+  assert.equal(exists(join(directory, `${runId}.tests`, '2-break', 'receipt.json')), true);
+});
+
+test('completion refuses a testRuns field that no test-run index backs', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-11-06T00:00:00Z', testRuns: { runs: 3 } }));
+  await assert.rejects(harness.complete({ sessionId, runId, summary: 'Claimed runs.' }), /completion writes it from the test-run index/);
+  assert.equal(exists(paths.complete), false);
+});
+
+test('completion reports every review JSON problem in one rejection and writes nothing', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  const broken = { ...readJson(paths.review), status: 'incomplete', completedAt: 7,
+    findings: [{ id: 'finding-1', state: 'accepted' }, { id: 'finding-2', state: 'accepted' }, { id: 'finding-3', state: 'rejected' }],
+    commentDrafts: [{ findingId: 'finding-2', path: 'app/a.rb', line: 3, body: 'Add the assertion.' }, { findingId: 'finding-9' }] };
+  writeFileSync(paths.review, JSON.stringify(broken));
+  const before = readFileSync(paths.review, 'utf8');
+  const error = await harness.complete({ sessionId, runId, summary: 'Broken' }).then(() => undefined, caught => caught);
+  assert.ok(error);
+  assert.match(error.message, /status must be "complete"/);
+  assert.match(error.message, /completedAt must be a timestamp string/);
+  assert.match(error.message, /1 invalid/);
+  assert.match(error.message, /commentDraft before completion: finding-1\./);
+  assert.doesNotMatch(error.message, /finding-2|finding-3/);
+  assert.equal(exists(paths.complete), false);
+  assert.equal(readFileSync(paths.review, 'utf8'), before);
+});
+
+test('completion reports a malformed map line together with a review JSON problem in one error', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'incomplete', completedAt: '2026-10-27T00:00:00Z' }));
+  writeFileSync(paths.map, 'not-json\n');
+  const error = await harness.complete({ sessionId, runId, summary: 'Broken' }).then(() => undefined, caught => caught);
+  assert.equal(error.message.split('\n- ').length, 3);
+  assert.match(error.message, /status must be "complete"/);
+  assert.match(error.message, /\.map\.jsonl lines that are not JSON objects: 1\./);
+  assert.equal(exists(paths.complete), false);
+});
+
+test('completion names malformed map lines without echoing their content', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-10-27T00:00:00Z', findings: [], commentDrafts: [] }));
+  const record = JSON.stringify({ id: 'node-1', runId, kind: 'evidence' });
+  writeFileSync(paths.map, `${record}\n{"note": "private-text"\nprivate-text\n\n[1]\n${record}\nnull\n`);
+  const before = readFileSync(paths.review, 'utf8');
+  const error = await harness.complete({ sessionId, runId, summary: 'Broken map' }).then(() => undefined, caught => caught);
+  assert.ok(error);
+  assert.match(error.message, new RegExp(`${runId}\\.map\\.jsonl lines that are not JSON objects: 2, 3, 5, 7\\.`));
+  assert.doesNotMatch(error.message, /private-text/);
+  assert.equal(exists(paths.complete), false);
+  assert.equal(readFileSync(paths.review, 'utf8'), before);
+});
+
+test('completion seals an open bug file once, and a malformed one is reported with the other problems', async t => {
+  const harness = createReviewFixture(t);
+  const { paths, runId, sessionId } = (await harness.tool('')).details;
+  const finding = { kind: 'fix', sourceIds: ['source-1'], requirementIds: ['requirement-1'], unitIds: ['unit-1'], repository: 'owner/repo', revision: 'abc123',
+    location: { path: 'src/a.ts', symbol: 'work', startLine: 3, endLine: 4 }, title: 'Guard the write', impact: 'A failed write drops work.', suggestedFix: 'Guard the write.',
+    humanReadable: 'A failed write drops the previous work. Keep it until the replacement succeeds.', rating: 'B' };
+  const append = () => harness.tools.get('agentic_code_review_append_finding').execute('append-1', { sessionId, runId, finding }, undefined, undefined, harness.ctx);
+  await append();
+  const open = readJson(paths.bugs);
+  assert.equal(open.findings.length, 1);
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'incomplete', completedAt: 7 }));
+  writeFileSync(paths.bugs, '[1]');
+  const before = readFileSync(paths.review, 'utf8');
+  const error = await harness.complete({ sessionId, runId, summary: 'Done' }).then(() => undefined, caught => caught);
+  assert.match(error.message, /status must be "complete"/);
+  assert.match(error.message, new RegExp(`${runId}\\.bugs\\.json must be a JSON object`));
+  assert.equal(readFileSync(paths.bugs, 'utf8'), '[1]');
+  assert.equal(readFileSync(paths.review, 'utf8'), before);
+  assert.equal(exists(paths.complete), false);
+
+  writeFileSync(paths.bugs, JSON.stringify(open));
+  writeFileSync(paths.review, JSON.stringify({ ...readJson(paths.review), status: 'complete', completedAt: '2026-10-27T00:00:00Z', findings: [], commentDrafts: [] }));
+  await harness.complete({ sessionId, runId, summary: 'Done' });
+  const sealed = readFileSync(paths.bugs, 'utf8');
+  assert.deepEqual(JSON.parse(sealed), { ...open, status: 'complete' });
+  assert.equal(statSync(paths.bugs).mode & 0o777, 0o600);
+  await assert.rejects(append(), /sealed/);
+  await harness.complete({ sessionId, runId, summary: 'Done' });
+  assert.equal(readFileSync(paths.bugs, 'utf8'), sealed);
 });
 
 test('prepared artifacts are private and completion wakes the invoking session exactly once', async t => {
