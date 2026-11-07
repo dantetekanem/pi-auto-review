@@ -9,6 +9,8 @@
 
 ### Changed
 
+- The reservation-model checker enforces a check contract. `formal/ReservationOwnership.checks` lists safe, mutant, control and counterexample checks, and each check runs in its own TLC configuration. A model with no control, or with a safeguard that no mutant turns off, is refused before anything runs. `verifyReservationModel` reports `contract-verified` only when every check passes. Host plans also pin `checks`, and `runReservationCheck` takes a check index instead of a mutation name.
+- `ReservationOwnership.tla` uses boolean safeguards instead of one `Mutation` string. Before, `NoUnjustifiedReacquisition` still held when a late or unconfirmed result settled a token. The history now records such a settle as `unconfirmed-settle`, so the `SettleNeedsConfirmation` mutant breaks the rule.
 - The review session takes fewer serial turns. Timestamps ride along with real calls, each stage's map records go in one write, one evidence record covers all PR threads, the final review JSON is written in one pass, and learning is composed in one save call. Saved files are read back only after a tool reports an error.
 - Collectors read only their contract and the pack. The invoking agent reads the review and bug files and opens map records only for claims its report cites. The completion summary is two to four sentences; the saved review is the handoff.
 - `agentic_code_review_complete` reports every review JSON problem and every malformed map line in one error, without echoing artifact content. It also seals the bug file after its checks pass, so the review session no longer edits it.

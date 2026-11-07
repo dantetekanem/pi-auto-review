@@ -14,7 +14,7 @@ The final report explains what it does, how it works, and where it falls short.
 - Per-run coordinator model/thinking selection and a completion handoff that does not pause previously authorized work.
 - [Evidence support and receipt verification](docs/evidence.md), explicit replay protection and [host-approved two-worker batches](docs/workers.md).
 - [Adaptive retrieval recommendations](docs/adaptive.md) with frozen budgets. They do not launch work or grant execution permission.
-- [Historical cases and benchmark tooling](docs/evaluation.md), plus a host-only finite reservation-model checker. The checker is not a TypeScript proof.
+- [Historical cases and benchmark tooling](docs/evaluation.md), plus a host-only finite reservation-model checker that runs safe, mutant, control and counterexample checks. The checker is not a TypeScript proof.
 
 Source-only reviews and the fixed one-batch workflow remain the defaults. In the eight-review pilot, both variants found 2/2 known defects; no known-defect recall gain was observed. Full production-policy, adaptive, parallel and formal-assisted comparisons remain unfinished.
 
