@@ -19,7 +19,7 @@ Use the PR's `baseSha` and `headSha` (`baseRefOid`/`headRefOid` on GitHub) as th
   `gh api graphql -F o=<owner> -F r=<repo> -F n=<n> -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved isOutdated path line comments(first:20){nodes{author{login} body createdAt url}}}}}}}'`
 - Meteorite: `gs pr view <n> --json` returns `reviews[]` (author, state, body, submittedAt, url); `gs pr view <n> --comments` appends the issue and inline comments to the human output.
 
-Classify every thread: human or automated (service accounts such as `*@*.iam.gserviceaccount.com`, names ending in `[bot]`, known review bots), inline with `path:line` or general, and open, resolved or outdated. Save the full text to `pr-threads.md` in the run directory and record one `evidence` record per thread with a one-sentence gist and its classification.
+Classify every thread: human or automated (service accounts such as `*@*.iam.gserviceaccount.com`, names ending in `[bot]`, known review bots), inline with `path:line` or general, and open, resolved or outdated. Save the full text to `pr-threads.md` in the run directory and record one `evidence` record for all threads: the counts by human and automated and by open, resolved and outdated, with links to `pr-threads.md` and `pr.md`. Do not write a record per thread; a thread's one-sentence gist and classification go into the mission of the zone it touches.
 
 Rules the workers receive: a point already raised and resolved is history, not a finding; an open human thread about a zone becomes a reopened question for that zone's reviewer to settle with current evidence, never a new bug by default; an automated comment is a lead to verify, not evidence; an author's self-audit or checklist comment is not a work list, verify only the claims a criterion depends on and never re-run the author's checklist; the review reconciles against these threads and never repeats one under a new title.
 
@@ -28,7 +28,7 @@ Rules the workers receive: a point already raised and resolved is history, not a
 - GitHub: `gh pr checks <n> --repo <owner>/<repo> --json name,state,bucket,link,workflow`
 - Meteorite: `gs pr checks <n> --json` returns `state`, `requiredChecks[]` with `name`, `state` and `present`, `checkRuns[]` with `name`, `status`, `conclusion` and `url`, and `statuses[]`. Exit code 8 means pending.
 
-Record an `evidence` record: the overall state, each required check with its state and link, and the head sha the checks belong to. If that sha is not the PR head, the checks are stale and the record says so. Grading rules: a failing required check is a stated condition on the merge grade, `medium` at best unless the failure is shown to be unrelated to the change; a missing or pending required check is a disclosed uncertainty, not a defect. Never wait for CI, poll, re-run, or call a blocking wait tool.
+Add the CI state to the same `evidence` record: the overall state, each required check with its state and link, and the head sha the checks belong to. If that sha is not the PR head, the checks are stale and the record says so. Grading rules: a failing required check is a stated condition on the merge grade, `medium` at best unless the failure is shown to be unrelated to the change; a missing or pending required check is a disclosed uncertainty, not a defect. Never wait for CI, poll, re-run, or call a blocking wait tool.
 
 ## 4. What reaches workers and the report
 

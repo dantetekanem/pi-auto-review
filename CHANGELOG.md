@@ -2,11 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- Reviews run the repository's own tests against the change through `agentic_code_review_run_tests`. Runs use a copy-on-write copy of the affected components, never the checkout, and never run setup commands, installs or services. A macOS sandbox denies the test's network access, its writes outside the copy, LaunchServices, Apple events and signals to other processes. A `baseline` must pass, a `revert` of the source change must fail, a `break` of a changed line should fail, and an `edge` test the reviewer writes holds or reproduces a bug. Reviewers propose breaks and edge tests, the visible top-level session runs them within a 12-run budget, and completion verifies every receipt and adds `testRuns` to the review. `settings.json` takes `tests` limits: `enabled`, `sandbox`, `maxRuns` and `timeoutSeconds`.
+- An optional `settings.json` in the auto-review directory sets the default review `model` and `thinking` for the tool and `/code-review`. Explicit tool arguments still win. A malformed file, an unknown key or an unsupported value stops the review before any artifact is written, and the error names the file. `agentic_code_review_list` skips the file.
+
 ### Changed
 
 - The reservation-model checker runs tla-ts 0.0.3 on Node instead of TLC on Java. A small runner calls tla-ts's `check` and prints one JSON line, which the adapter reads instead of TLC's tool output. Host plans pin `node`, the Node that runs the adapter, and the tla-ts package directory as `checker`, instead of `java`, `jar` and the Java runtime. `runtimeIdentity` is now `directoryIdentity`.
 - The reservation-model checker enforces a check contract. `formal/ReservationOwnership.checks` lists safe, mutant, control and counterexample checks, and each check runs in its own config. A model with no control, or with a safeguard that no mutant turns off, is refused before anything runs. `verifyReservationModel` reports `contract-verified` only when every check passes. Host plans also pin `checks`, and `runReservationCheck` takes a check index instead of a mutation name.
 - `ReservationOwnership.tla` uses boolean safeguards instead of one `Mutation` string. Before, `NoUnjustifiedReacquisition` still held when a late or unconfirmed result settled a token. The history now records such a settle as `unconfirmed-settle`, so the `SettleNeedsConfirmation` mutant breaks the rule.
+- The review session takes fewer serial turns. Timestamps ride along with real calls, each stage's map records go in one write, one evidence record covers all PR threads, the final review JSON is written in one pass, and learning is composed in one save call. Saved files are read back only after a tool reports an error.
+- Collectors read only their contract and the pack. The invoking agent reads the review and bug files and opens map records only for claims its report cites. The completion summary is two to four sentences; the saved review is the handoff.
+- `agentic_code_review_complete` reports every review JSON problem and every malformed map line in one error, without echoing artifact content. It also seals the bug file after its checks pass, so the review session no longer edits it.
+
+### Fixed
+
+- A new review pane that reports `agent_pane_busy` is retried in place instead of failing over to a headless run.
+- An abort stops the busy-pane waits and the headless fallback, whatever exit code the headless child reports. The fallback reruns only a failure from its first minute, and a later failure says how long the run lasted. The launch receipt states why the visible pane failed.
+- `timing` ends at `completedAt`, and the report takes the full run time from `telemetry.durationMs`, so learning and completion are no longer missing from the total.
 
 ## 0.7.1 (2026-10-31)
 
