@@ -13,8 +13,8 @@ type Plan = {
   expiresAt: number;
   maxRuns: number;
   outputDir: string;
-  files: Record<Input | 'java' | 'jar' | 'time', Pin>;
-  runtime: Pin;
+  files: Record<Input | 'node' | 'time', Pin>;
+  checker: Pin;
 };
 type Observation = { status: string; exitCode: number | null; stdout: string; stderr: string };
 type Scope = { kind: string; property: string; sourceSha256: string; bounds: object; assumptions: string[]; exclusions: string[] };
@@ -33,8 +33,9 @@ const inputPaths = {
   scope: '../formal/ReservationOwnership.scope.json', source: './experiments-reservations.ts',
 };
 const sealedInputs = Object.fromEntries(Object.entries(inputPaths).map(([key, path]) => [key, digest(readFileSync(new URL(path, import.meta.url)))]));
+const runnerPath = fileURLToPath(new URL('./model-check-runner.mjs', import.meta.url));
 const adapterPaths = ['./reservation-model-check.ts', './experiments-oracle.ts', './model-check-contract.ts']
-  .map(path => fileURLToPath(new URL(path, import.meta.url)));
+  .map(path => fileURLToPath(new URL(path, import.meta.url))).concat(runnerPath);
 const adapterSha256 = adapterPaths.map(path => digest(readFileSync(path)));
 const nodeSha256 = digest(readFileSync(process.execPath));
 
@@ -57,19 +58,19 @@ function pinned(pin: Pin): Buffer {
   return result;
 }
 
-/** Hash every regular runtime file; a launcher hash alone does not identify Java. */
-export function runtimeIdentity(root: string): string {
+/** Hash every regular file of the checker package; its entry imports the files next to it. */
+export function directoryIdentity(root: string): string {
   const files: [string, string][] = [];
   let total = 0;
   function visit(directory: string) {
-    if (!lstatSync(directory).isDirectory()) throw new Error('Unsupported runtime directory.');
+    if (!lstatSync(directory).isDirectory()) throw new Error('Unsupported checker directory.');
     for (const entry of readdirSync(directory).sort()) {
       const path = join(directory, entry);
       const stat = lstatSync(path);
       if (stat.isDirectory()) visit(path);
       else {
         total += stat.size;
-        if (total > 536870912 || files.length >= 4096) throw new Error('Runtime identity limit exceeded.');
+        if (total > 536870912 || files.length >= 4096) throw new Error('Directory identity limit exceeded.');
         files.push([relative(root, path), digest(bytes(path, 268435456))]);
       }
     }
@@ -78,19 +79,20 @@ export function runtimeIdentity(root: string): string {
   return canonicalSha256(files);
 }
 function inspect(plan: Plan) {
-  exactKeys(plan, ['approvedBy', 'expiresAt', 'maxRuns', 'outputDir', 'files', 'runtime']);
-  exactKeys(plan.files, ['model', 'config', 'checks', 'scope', 'source', 'java', 'jar', 'time']);
-  exactKeys(plan.runtime, ['path', 'sha256']);
+  exactKeys(plan, ['approvedBy', 'expiresAt', 'maxRuns', 'outputDir', 'files', 'checker']);
+  exactKeys(plan.files, ['model', 'config', 'checks', 'scope', 'source', 'node', 'time']);
+  exactKeys(plan.checker, ['path', 'sha256']);
   if (typeof plan.approvedBy !== 'string' || !plan.approvedBy.trim() || plan.approvedBy.length > 200
     || !Number.isSafeInteger(plan.expiresAt) || !Number.isInteger(plan.maxRuns) || plan.maxRuns < 1
     || typeof plan.outputDir !== 'string' || !isAbsolute(plan.outputDir) || process.platform !== 'darwin'
-    || plan.files.time.path !== '/usr/bin/time') throw new Error('Invalid host model-check plan.');
+    || plan.files.time.path !== '/usr/bin/time' || plan.files.node.path !== process.execPath) throw new Error('Invalid host model-check plan.');
   const contents = Object.fromEntries(Object.entries(plan.files).map(([key, pin]) => [key, pinned(pin)]));
   for (const key of Object.keys(inputPaths) as Input[]) {
     if (plan.files[key].sha256 !== sealedInputs[key]) throw new Error(`Unsupported model input or scope: ${key}`);
   }
-  if (!isAbsolute(plan.runtime.path) || runtimeIdentity(plan.runtime.path) !== plan.runtime.sha256
-    || relative(plan.runtime.path, plan.files.java.path).startsWith('..')) throw new Error('Java runtime identity changed.');
+  if (!isAbsolute(plan.checker.path) || directoryIdentity(plan.checker.path) !== plan.checker.sha256) throw new Error('Checker identity changed.');
+  const manifest = JSON.parse(bytes(join(plan.checker.path, 'package.json')).toString());
+  if (manifest.name !== 'tla-ts' || manifest.version !== '0.0.3' || !lstatSync(checkerEntry(plan)).isFile()) throw new Error('Unsupported model checker.');
   if (adapterPaths.some((path, index) => digest(bytes(path)) !== adapterSha256[index])) throw new Error('Adapter identity changed.');
   const scope: Scope = JSON.parse(contents.scope.toString());
   if (scope.kind !== 'model-only' || scope.property !== 'NoUnjustifiedReacquisition'
@@ -98,7 +100,7 @@ function inspect(plan: Plan) {
   const checks = planModelChecks(contents.checks.toString(), contents.config.toString(), contents.model.toString());
   if (plan.maxRuns > checks.length) throw new Error('Invalid host model-check plan.');
   return { contents, scope, checks, bindings: canonicalSha256({ plan, adapterSha256, nodeSha256,
-    policy: 'tlc-1.7.4-macos-bfs-one-worker-128m-60000ms-65536bytes-checks-v2' }) };
+    policy: 'tla-ts-0.0.3-macos-one-worker-128m-60000ms-65536bytes-checks-v3' }) };
 }
 
 /** Host API only: pins are approved provenance, not proof of an upstream tool's authenticity. */
@@ -111,46 +113,26 @@ export function prepareReservationCheck(plan: Plan): object {
   return grant;
 }
 
-/** TLC 1.7.4 EC/MP tool frames, not free-form success substrings. */
-export function interpretTlc(observation: Observation) {
+/** The runner's single JSON line for a tla-ts 0.0.3 `check` result; anything else stays unknown. */
+export function interpretCheck(observation: Observation) {
   const unknown = { status: 'unknown' as const };
-  if (observation.status !== 'completed' || observation.stderr.includes('@!@!@')) return unknown;
-  const messages = [...observation.stdout.matchAll(/@!@!@STARTMSG (\d+):(\d+) @!@!@\r?\n([\s\S]*?)\r?\n@!@!@ENDMSG \1 @!@!@/g)]
-    .map(match => ({ id: Number(match[1]), level: Number(match[2]), body: match[3] }));
-  const has = (id: number) => messages.filter(message => message.id === id);
-  const starts = observation.stdout.match(/@!@!@STARTMSG/g)?.length ?? 0;
-  const ends = observation.stdout.match(/@!@!@ENDMSG/g)?.length ?? 0;
-  if (messages.length !== starts || starts !== ends || has(2187).length !== 1 || has(2185).length !== 1 || has(2186).length !== 1
-    || [2188, 2271, 2197, 2198, 2204, 2210].some(id => has(id).length)) return unknown;
-  const position = (id: number) => messages.findIndex(message => message.id === id);
-  if (!/with 1 worker\b/.test(has(2187)[0].body) || has(2190).length !== 1
-    || position(2185) >= position(2190) || position(2187) >= position(2190)
-    || position(2190) >= position(2199) || position(2199) >= position(2186)) return unknown;
-  const initial = has(2190)[0]?.body.match(/initial states: ([\d,]+) distinct state/);
-  const stats = has(2199)[0]?.body.match(/^([\d,]+) states generated, ([\d,]+) distinct states found, ([\d,]+) states left on queue\.$/);
-  const count = (value: string) => Number(value.replaceAll(',', ''));
-  if (!initial || !Number.isSafeInteger(count(initial[1])) || count(initial[1]) < 1 || !stats || has(2199).length !== 1
-    || stats.slice(1).some(value => !Number.isSafeInteger(count(value))) || count(stats[2]) < 1
-    || count(stats[1]) < count(stats[2])) return unknown;
-  // EC.TLC_ENVIRONMENT_JVM_GC advises a faster collector; it does not change the checked state space.
-  const performanceAdvisories = messages.filter(message => message.id === 2401 && message.level === 3
-    && message.body === 'Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.');
-  const advisories = performanceAdvisories.map(message => ({ code: message.id, message: message.body }));
-  const errors = messages.filter(message => message.level > 0 && message.level < 4 && !performanceAdvisories.includes(message));
-  if (observation.exitCode === 0 && !errors.length && has(2193).length === 1 && count(stats[3]) === 0) {
-    return { status: 'bounded-model-checked' as const, generated: count(stats[1]), distinct: count(stats[2]), advisories };
+  if (observation.status !== 'completed' || observation.exitCode !== 0 || !/^\{[^\n]*\}\n$/.test(observation.stdout)) return unknown;
+  let line;
+  try { line = JSON.parse(observation.stdout); } catch { return unknown; }
+  if (Object.keys(line).sort().join() !== 'distinct,generated,invariant,queued,status,trace') return unknown;
+  const { status, invariant, trace, generated, distinct, queued } = line;
+  if (![trace, generated, distinct, queued].every(count => Number.isSafeInteger(count) && count >= 0)
+    || distinct < 1 || generated < distinct) return unknown;
+  if (status === 'success' && invariant === null && trace === 0 && queued === 0) {
+    return { status: 'bounded-model-checked' as const, generated, distinct };
   }
-  const invariant = has(2110)[0]?.body.match(/^Invariant ([A-Za-z]\w*) is violated\.$/)?.[1];
-  if (observation.exitCode === 12 && invariant && !has(2193).length && has(2110).length === 1 && has(2121).length === 1
-    && has(2217).length > 0 && errors.every(message => [2110, 2121].includes(message.id))) {
-    return { status: 'model-counterexample' as const, invariant, advisories };
+  if (status === 'invariant-violation' && typeof invariant === 'string' && /^[A-Za-z]\w*$/.test(invariant) && trace > 0) {
+    return { status: 'model-counterexample' as const, invariant };
   }
   return unknown;
 }
-function javaArgs(plan: Plan, directory: string) {
-  return ['-Xmx128m', '-XX:MaxDirectMemorySize=32m', `-Djava.io.tmpdir=${directory}`, '-cp', plan.files.jar.path,
-    'tlc2.TLC', '-cleanup', '-seed', '1', '-fp', '0', '-fpmem', '0.1',
-    '-workers', '1', '-config', 'ReservationOwnership.cfg', '-tool', 'ReservationOwnership'];
+function checkerEntry(plan: Plan) {
+  return join(plan.checker.path, 'dist', 'index.js');
 }
 function execute(plan: Plan, cwd: string, signal?: AbortSignal): Promise<Observation & { durationMs: number; peakRssBytes: number | null }> {
   return new Promise(resolve => {
@@ -158,7 +140,7 @@ function execute(plan: Plan, cwd: string, signal?: AbortSignal): Promise<Observa
     let status = 'completed';
     let remaining = 65536;
     const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
-    const child = spawn(plan.files.time.path, ['-l', plan.files.java.path, ...javaArgs(plan, cwd)], {
+    const child = spawn(plan.files.time.path, ['-l', plan.files.node.path, '--max-old-space-size=128', runnerPath, checkerEntry(plan), 'ReservationOwnership'], {
       cwd, env: { LANG: 'C', LC_ALL: 'C', HOME: cwd, TMPDIR: cwd }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stop = (reason: string) => {
@@ -246,7 +228,7 @@ export function readReservationCheck(reference: Pin, plan: Plan) {
   if (digest(stdout) !== receipt.stdoutSha256 || digest(stderr) !== receipt.stderrSha256
     || digest(bytes(join(directory, 'ReservationOwnership.tla'))) !== plan.files.model.sha256
     || digest(bytes(join(directory, 'ReservationOwnership.cfg'))) !== digest(planned.config)) throw new Error('Output or model identity mismatch.');
-  const result = interpretTlc({ ...receipt.execution, stdout, stderr });
+  const result = interpretCheck({ ...receipt.execution, stdout, stderr });
   return {
     kind: 'model-only' as const,
     ...result,
